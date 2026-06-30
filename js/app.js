@@ -50,9 +50,11 @@ document.addEventListener("DOMContentLoaded", () => {
     setStatus(els.modelStatus, "Initializing models (please wait)...", "pending");
 
     try {
-      // Pass paths directly. ONNX Runtime will fetch .onnx AND companion .data files.
+      // Use the EXACT filenames that exist on the server (do not rename)
       const providers = ("gpu" in navigator) ? ["webgpu", "wasm"] : ["wasm"];
-      await loadSessions('./models/kp_detector.onnx', './models/generator.onnx', providers);
+      
+      // The ONNX Runtime will now correctly pair the .onnx file with its .data sidecar
+      await loadSessions('./models/FOMMDetector.onnx', './models/FOMMGenerator.onnx', providers);
 
       setStatus(els.modelStatus, `Initialized (${providers.join(", ")})`, "ok");
       updateRunButton();
