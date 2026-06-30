@@ -3,6 +3,8 @@
 // Note: loadSessions now accepts URL strings to enable sidecar file resolution.
 
 export const IO_CONFIG = {
+  // IMPORTANT: Verify these names in Netron (https://netron.app) 
+  // if you get "Missing tensor" errors.
   kpDetector: {
     inputName: "source",
     outputKeypoints: "kp",
@@ -32,6 +34,7 @@ export function configureOrt() {
  * automatically resolve companion .data files.
  */
 export async function loadSessions(kpModelUrl, genModelUrl, executionProviders = ["wasm"]) {
+  // ORT uses the URL path to locate the companion .data file in the same directory.
   kpSession = await ort.InferenceSession.create(kpModelUrl, { executionProviders });
   genSession = await ort.InferenceSession.create(genModelUrl, { executionProviders });
   return { kpSession, genSession };
@@ -77,7 +80,10 @@ async function detectKeypoints(frameTensor) {
   const results = await kpSession.run(feeds);
   const kp = results[IO_CONFIG.kpDetector.outputKeypoints];
   const jac = results[IO_CONFIG.kpDetector.outputJacobian] || null;
-  if (!kp) throw new Error(`Missing tensor: ${IO_CONFIG.kpDetector.outputKeypoints}`);
+  if (!kp) {
+      console.error("Available tensors in KP:", Object.keys(results));
+      throw new Error(`Missing tensor: ${IO_CONFIG.kpDetector.outputKeypoints}`);
+  }
   return { kp, jac };
 }
 
@@ -98,7 +104,10 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
 
   const results = await genSession.run(feeds);
   const out = results[IO_CONFIG.generator.output];
-  if (!out) throw new Error(`Missing output tensor: ${IO_CONFIG.generator.output}`);
+  if (!out) {
+      console.error("Available tensors in Generator:", Object.keys(results));
+      throw new Error(`Missing output tensor: ${IO_CONFIG.generator.output}`);
+  }
   return out;
 }
 
