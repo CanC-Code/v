@@ -50,10 +50,9 @@ document.addEventListener("DOMContentLoaded", () => {
     setStatus(els.modelStatus, "Initializing models (please wait)...", "pending");
 
     try {
-      // Use the EXACT filenames that exist on the server (do not rename)
+      // Use original filenames. ORT will now correctly resolve FOMMDetector.onnx + FOMMDetector.data
       const providers = ("gpu" in navigator) ? ["webgpu", "wasm"] : ["wasm"];
       
-      // The ONNX Runtime will now correctly pair the .onnx file with its .data sidecar
       await loadSessions('./models/FOMMDetector.onnx', './models/FOMMGenerator.onnx', providers);
 
       setStatus(els.modelStatus, `Initialized (${providers.join(", ")})`, "ok");
