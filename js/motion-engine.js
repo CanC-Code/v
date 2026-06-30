@@ -90,25 +90,28 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
 
   const { kp: drivingKp, jac: drivingJac } = await detectKeypoints(drivingFrameTensor);
 
-  // Comprehensive mapping for Qualcomm FOMM model
+  // Very broad mapping to cover Qualcomm FOMM variations
   const tensorMapping = {
     "image": sourceTensor,
     "source_image": sourceTensor,
     "source": sourceTensor,
 
+    // Keypoints
     "source_keypoints": sourceKp,
     "source_keypoint_values": sourceKp,
     "kp_source": sourceKp,
     "source_kp": sourceKp,
+    "kp_norm_values": sourceKp,           // ← Added
 
+    // Driving
     "driving_keypoints": drivingKp,
     "driving_keypoint_values": drivingKp,
     "kp_driving": drivingKp,
     "driving_kp": drivingKp,
 
-    // Jacobian names
+    // Jacobians
     "source_jacobian": sourceJac,
-    "source_keypoint_jacobians": sourceJac,   // ← Fixed
+    "source_keypoint_jacobians": sourceJac,
     "jac_source": sourceJac,
     "jacobian_source": sourceJac,
 
@@ -123,7 +126,7 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
   return results[genSession.outputNames[0]];
 }
 
-// Tensor Utils
+// Tensor Utils (unchanged)
 export function frameToTensor(canvas, size = 256) {
   const ctx = canvas.getContext("2d");
   const imgData = ctx.getImageData(0, 0, size, size);
