@@ -1,5 +1,6 @@
 // motion-engine.js
 // Finalized inference pipeline for Qualcomm FOMM ONNX assets.
+// Note: loadSessions now accepts URL strings to enable sidecar file resolution.
 
 export const IO_CONFIG = {
   kpDetector: {
@@ -26,9 +27,13 @@ export function configureOrt() {
   ort.env.wasm.simd = true;
 }
 
-export async function loadSessions(kpModelBytes, genModelBytes, executionProviders = ["wasm"]) {
-  kpSession = await ort.InferenceSession.create(kpModelBytes, { executionProviders });
-  genSession = await ort.InferenceSession.create(genModelBytes, { executionProviders });
+/**
+ * Loads sessions via URL strings. This allows ONNX Runtime to 
+ * automatically resolve companion .data files.
+ */
+export async function loadSessions(kpModelUrl, genModelUrl, executionProviders = ["wasm"]) {
+  kpSession = await ort.InferenceSession.create(kpModelUrl, { executionProviders });
+  genSession = await ort.InferenceSession.create(genModelUrl, { executionProviders });
   return { kpSession, genSession };
 }
 
