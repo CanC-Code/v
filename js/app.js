@@ -45,7 +45,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   configureOrt();
 
-  // Model Initialization (unchanged)
   els.loadBtn.addEventListener("click", async () => {
     els.loadBtn.disabled = true;
     els.progressWrap.classList.remove("hidden");
@@ -68,7 +67,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Input handlers (unchanged)
   els.sourceInput.addEventListener("change", e => {
     const file = e.target.files[0];
     if (!file) return;
@@ -91,7 +89,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }, { once: true });
   });
 
-  // Generation with frame counter
   els.runBtn.addEventListener("click", async () => {
     els.runBtn.disabled = true;
     els.progressWrap.classList.remove("hidden");
@@ -109,7 +106,7 @@ document.addEventListener("DOMContentLoaded", () => {
       sampleCanvas.width = sampleCanvas.height = size;
       const sampleCtx = sampleCanvas.getContext("2d");
 
-      setStatus(els.runStatus, `Generating ${frameCount} frames... (this will take a while)`, "pending");
+      setStatus(els.runStatus, `Generating ${frameCount} frames...`, "pending");
 
       for (let i = 0; i < frameCount; i++) {
         video.currentTime = (i / frameCount) * video.duration;
@@ -127,13 +124,11 @@ document.addEventListener("DOMContentLoaded", () => {
         const pct = Math.round(((i + 1) / frameCount) * 100);
         els.progressBar.value = pct;
         els.progressLabel.textContent = `${pct}%`;
-
-        // Live status
         setStatus(els.runStatus, `Generating frame ${i+1}/${frameCount}...`, "pending");
       }
 
       els.exportBtn.disabled = false;
-      setStatus(els.runStatus, `✅ Generation complete! ${generatedFrames.length} frames ready.`, "ok");
+      setStatus(els.runStatus, `✅ Done! ${generatedFrames.length} frames generated.`, "ok");
     } catch (err) {
       console.error(err);
       setStatus(els.runStatus, `Generation failed: ${err.message}`, "error");
@@ -143,21 +138,24 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Export (unchanged)
   els.exportBtn.addEventListener("click", async () => {
     if (generatedFrames.length === 0) return;
     els.exportBtn.disabled = true;
-    setStatus(els.runStatus, "Encoding WebM video...", "pending");
+    setStatus(els.runStatus, "Exporting WebM...", "pending");
 
     try {
       const canvas = document.createElement("canvas");
       canvas.width = canvas.height = IO_CONFIG.frameSize;
       const ctx = canvas.getContext("2d");
+
       const stream = canvas.captureStream(12);
       const recorder = new MediaRecorder(stream, { mimeType: "video/webm;codecs=vp9" });
       const chunks = [];
 
-      recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+      recorder.ondataavailable = e => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+
       recorder.onstop = () => {
         const blob = new Blob(chunks, { type: "video/webm" });
         const url = URL.createObjectURL(blob);
@@ -166,17 +164,20 @@ document.addEventListener("DOMContentLoaded", () => {
         a.download = "motionforge-output.webm";
         a.click();
         URL.revokeObjectURL(url);
-        setStatus(els.runStatus, "✅ Video exported successfully!", "ok");
+        setStatus(els.runStatus, "✅ Export successful!", "ok");
       };
 
       recorder.start();
+
       for (const frame of generatedFrames) {
         ctx.putImageData(frame, 0, 0);
-        await new Promise(r => setTimeout(r, 70));
+        await new Promise(r => setTimeout(r, 60));
       }
+
       recorder.stop();
     } catch (err) {
-      setStatus(els.runStatus, "Export failed", "error");
+      console.error("Export error:", err);
+      setStatus(els.runStatus, `Export failed: ${err.message}`, "error");
     } finally {
       els.exportBtn.disabled = false;
     }
