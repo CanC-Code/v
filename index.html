@@ -41,11 +41,19 @@
   <section class="panel" id="run-panel">
     <h2>3. Generate</h2>
     <button id="run-btn" disabled>Run Motion Transfer</button>
+    <div id="progress-wrap" class="hidden">
+      <progress id="progress-bar" value="0" max="100"></progress>
+      <span id="progress-label">0%</span>
+    </div>
+    <div id="run-status" class="status"></div>
   </section>
 
   <section class="panel" id="output-panel">
     <h2>4. Output</h2>
     <canvas id="output-canvas" width="256" height="256"></canvas>
+    <div style="margin-top: 10px;">
+      <button id="export-btn" disabled>Export as WebM</button>
+    </div>
   </section>
 
 </main>
