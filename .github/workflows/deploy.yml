@@ -34,20 +34,18 @@ jobs:
           # 2. Extract into a temporary directory
           unzip -q fomm.zip -d temp_models
           
-          # 3. Copy files preserving original names (Required for internal .data linking)
+          # 3. Copy files using original names to avoid breaking internal links
+          # The ONNX files are hardcoded to look for their .data sidecars by name.
           find temp_models -type f \( -name "*FOMMDetector.onnx" -o -name "*FOMMDetector.data" \) -exec cp {} models/ \;
           find temp_models -type f \( -name "*FOMMGenerator.onnx" -o -name "*FOMMGenerator.data" \) -exec cp {} models/ \;
           
-          # 4. Clean up temporary files
+          # 4. Clean up
           rm -rf fomm.zip temp_models
-          
-          # Verify files are there (Ensure FOMMDetector.onnx AND FOMMDetector.data are listed)
           ls -lh models/
 
       - name: Create .nojekyll file
         run: |
-          # This tells GitHub Pages NOT to process these files with Jekyll
-          # Jekyll often blocks or renames .data/.onnx files, causing 404s
+          # Disable Jekyll so it doesn't process or rename our model files
           touch .nojekyll
 
       - name: Setup Pages
