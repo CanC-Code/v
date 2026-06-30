@@ -45,7 +45,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   configureOrt();
 
-  // Initialize with Progress
   els.loadBtn.addEventListener("click", async () => {
     els.loadBtn.disabled = true;
     els.progressWrap.classList.remove("hidden");
@@ -58,24 +57,24 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     try {
-      // Prefer WebGPU when available
-      const providers = ("gpu" in navigator) ? ["webgpu", "wasm"] : ["wasm"];
-      console.log("Providers:", providers);
+      // Force WASM first for stability
+      const providers = ["wasm"];
+      console.log("Using providers:", providers);
 
       await loadSessions('./models/FOMMDetector.onnx', './models/FOMMGenerator.onnx', providers, updateProgress);
 
-      setStatus(els.modelStatus, `✅ Initialized (${providers.join(", ")})`, "ok");
+      setStatus(els.modelStatus, `✅ Initialized (WASM)`, "ok");
       updateRunButton();
     } catch (err) {
-      console.error(err);
+      console.error("Init error:", err);
       setStatus(els.modelStatus, `Failed: ${err.message}`, "error");
     } finally {
       els.loadBtn.disabled = false;
-      setTimeout(() => els.progressWrap.classList.add("hidden"), 1800);
+      setTimeout(() => els.progressWrap.classList.add("hidden"), 2000);
     }
   });
 
-  // Input handlers
+  // Input Handling
   els.sourceInput.addEventListener("change", (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -98,8 +97,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }, { once: true });
   });
 
-  // Run Generation
+  // Generation (kept minimal)
   els.runBtn.addEventListener("click", async () => {
+    // ... same as previous full version
     els.runBtn.disabled = true;
     els.progressWrap.classList.remove("hidden");
     generatedFrames = [];
@@ -129,8 +129,9 @@ document.addEventListener("DOMContentLoaded", () => {
         generatedFrames.push(imageData);
         els.outputCanvas.getContext("2d").putImageData(imageData, 0, 0);
 
-        els.progressBar.value = Math.round(((i + 1) / frameCount) * 100);
-        els.progressLabel.textContent = `${Math.round(((i + 1) / frameCount) * 100)}%`;
+        const pct = Math.round(((i + 1) / frameCount) * 100);
+        els.progressBar.value = pct;
+        els.progressLabel.textContent = `${pct}%`;
       }
 
       els.exportBtn.disabled = false;
@@ -143,7 +144,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Export
+  // Export remains the same as previous
   els.exportBtn.addEventListener("click", async () => {
     if (generatedFrames.length === 0) return;
     els.exportBtn.disabled = true;
@@ -174,7 +175,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       recorder.stop();
     } catch (err) {
-      setStatus(els.runStatus, `Export failed`, "error");
+      setStatus(els.runStatus, "Export failed", "error");
     } finally {
       els.exportBtn.disabled = false;
     }
