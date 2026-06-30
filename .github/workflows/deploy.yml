@@ -27,9 +27,22 @@ jobs:
       - name: Fetch Models
         run: |
           mkdir -p models
-          # Downloading valid, free, and public ONNX motion models
-          wget -O models/kp_detector.onnx "https://huggingface.co/qualcomm/First-Order-Motion-Model/resolve/main/FOMMDetector.onnx"
-          wget -O models/generator.onnx "https://huggingface.co/myn0908/Live-Portrait-ONNX/resolve/main/generator.onnx"
+          
+          # 1. Download the public ONNX asset bundle for FOMM (First Order Motion Model)
+          wget -qO fomm.zip "https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/fomm/releases/v0.49.1/fomm-onnx-float.zip"
+          
+          # 2. Extract into a temporary directory
+          unzip -q fomm.zip -d temp_models
+          
+          # 3. Locate the specific .onnx files and copy them to the models directory with the names the UI expects
+          find temp_models -type f -name "*FOMMDetector.onnx" -exec cp {} models/kp_detector.onnx \;
+          find temp_models -type f -name "*FOMMGenerator.onnx" -exec cp {} models/generator.onnx \;
+          
+          # 4. Clean up temporary files to keep the GitHub Pages artifact small
+          rm -rf fomm.zip temp_models
+          
+          # Verify the models were successfully placed
+          ls -lh models/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
