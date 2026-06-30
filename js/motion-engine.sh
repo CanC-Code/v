@@ -1,11 +1,11 @@
 // motion-engine.js
-// Updated for Qualcomm FOMM ONNX asset bundle compatibility.
+// Finalized inference pipeline for Qualcomm FOMM ONNX assets.
 
 export const IO_CONFIG = {
   kpDetector: {
-    inputName: "source",        // FOMM detector input
-    outputKeypoints: "kp",      // Matches FOMMDetector.onnx output
-    outputJacobian: "jac",      // Matches FOMMDetector.onnx output
+    inputName: "source",
+    outputKeypoints: "kp",
+    outputJacobian: "jac",
   },
   generator: {
     inputSource: "source",
@@ -13,9 +13,9 @@ export const IO_CONFIG = {
     inputKpDriving: "kp_driving",
     inputJacobianSource: "jac_source",
     inputJacobianDriving: "jac_driving",
-    output: "prediction",       // Matches FOMMGenerator.onnx output
+    output: "prediction",
   },
-  frameSize: 256, 
+  frameSize: 256,
 };
 
 let kpSession = null;
@@ -72,7 +72,7 @@ async function detectKeypoints(frameTensor) {
   const results = await kpSession.run(feeds);
   const kp = results[IO_CONFIG.kpDetector.outputKeypoints];
   const jac = results[IO_CONFIG.kpDetector.outputJacobian] || null;
-  if (!kp) throw new Error(`Keypoint detector missing tensor: ${IO_CONFIG.kpDetector.outputKeypoints}`);
+  if (!kp) throw new Error(`Missing tensor: ${IO_CONFIG.kpDetector.outputKeypoints}`);
   return { kp, jac };
 }
 
@@ -93,7 +93,7 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
 
   const results = await genSession.run(feeds);
   const out = results[IO_CONFIG.generator.output];
-  if (!out) throw new Error(`Generator missing output tensor: ${IO_CONFIG.generator.output}`);
+  if (!out) throw new Error(`Missing output tensor: ${IO_CONFIG.generator.output}`);
   return out;
 }
 
