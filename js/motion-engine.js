@@ -45,10 +45,31 @@ export async function loadSessions(kpModelUrl, genModelUrl, executionProviders =
   await verifyFile(kpModelUrl);
   await verifyFile(genModelUrl);
   
-  // 2. Create sessions
-  // ORT uses the URL path to locate the companion .data file in the same directory.
-  kpSession = await ort.InferenceSession.create(kpModelUrl, { executionProviders });
-  genSession = await ort.InferenceSession.create(genModelUrl, { executionProviders });
+  // Extract expected external data internal identifiers and target URLs
+  const kpDataFileName = kpModelUrl.split('/').pop().replace('.onnx', '.data');
+  const genDataFileName = genModelUrl.split('/').pop().replace('.onnx', '.data');
+
+  const kpDataUrl = kpModelUrl.replace('.onnx', '.data');
+  const genDataUrl = genModelUrl.replace('.onnx', '.data');
+
+  // Verify external weight data files are available before ORT loads
+  await verifyFile(kpDataUrl);
+  await verifyFile(genDataUrl);
+
+  // 2. Create sessions with externalData configured to prevent Emscripten FileSystem mount errors
+  kpSession = await ort.InferenceSession.create(kpModelUrl, { 
+    executionProviders,
+    externalData: [
+      { path: kpDataFileName, data: kpDataUrl }
+    ]
+  });
+  
+  genSession = await ort.InferenceSession.create(genModelUrl, { 
+    executionProviders,
+    externalData: [
+      { path: genDataFileName, data: genDataUrl }
+    ]
+  });
 
   // Debug: Log the loaded layers
   console.log("Detector Inputs:", kpSession.inputNames);
