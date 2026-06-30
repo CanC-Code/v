@@ -21,7 +21,6 @@ async function verifyFile(url) {
 export async function loadSessions(kpModelUrl, genModelUrl, executionProviders = ["wasm"], onProgress = null) {
   try {
     if (onProgress) onProgress(10, "Verifying files...");
-
     await verifyFile(kpModelUrl);
     await verifyFile(genModelUrl);
 
@@ -44,7 +43,7 @@ export async function loadSessions(kpModelUrl, genModelUrl, executionProviders =
       graphOptimizationLevel: 'all'
     });
 
-    if (onProgress) onProgress(75, "Creating Generator session (this may take a while)...");
+    if (onProgress) onProgress(75, "Creating Generator session...");
 
     genSession = await ort.InferenceSession.create(genModelUrl, {
       executionProviders,
@@ -72,7 +71,7 @@ function buildFeeds(session, tensorMap) {
     if (tensorMap[name]) {
       feeds[name] = tensorMap[name];
     } else {
-      console.error(`ERROR: Model requires input '${name}' but not provided`);
+      console.error(`Missing input: ${name}`);
     }
   });
   return feeds;
@@ -91,15 +90,14 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
 
   const { kp: drivingKp, jac: drivingJac } = await detectKeypoints(drivingFrameTensor);
 
-  // Expanded mapping to cover all common FOMM input names
+  // Comprehensive mapping for Qualcomm FOMM model
   const tensorMapping = {
     "image": sourceTensor,
     "source_image": sourceTensor,
     "source": sourceTensor,
 
-    // Keypoints
     "source_keypoints": sourceKp,
-    "source_keypoint_values": sourceKp,      // ← This was missing
+    "source_keypoint_values": sourceKp,
     "kp_source": sourceKp,
     "source_kp": sourceKp,
 
@@ -108,11 +106,14 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
     "kp_driving": drivingKp,
     "driving_kp": drivingKp,
 
-    // Jacobians
+    // Jacobian names
     "source_jacobian": sourceJac,
+    "source_keypoint_jacobians": sourceJac,   // ← Fixed
     "jac_source": sourceJac,
     "jacobian_source": sourceJac,
+
     "driving_jacobian": drivingJac,
+    "driving_keypoint_jacobians": drivingJac,
     "jac_driving": drivingJac,
     "jacobian_driving": drivingJac
   };
@@ -122,7 +123,7 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
   return results[genSession.outputNames[0]];
 }
 
-// Tensor utilities
+// Tensor Utils
 export function frameToTensor(canvas, size = 256) {
   const ctx = canvas.getContext("2d");
   const imgData = ctx.getImageData(0, 0, size, size);
