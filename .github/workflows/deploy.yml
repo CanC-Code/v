@@ -28,25 +28,20 @@ jobs:
         run: |
           mkdir -p models
           
-          # 1. Download the public ONNX asset bundle
+          # 1. Download bundle
           wget -qO fomm.zip "https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/fomm/releases/v0.49.1/fomm-onnx-float.zip"
-          
-          # 2. Extract into a temporary directory
           unzip -q fomm.zip -d temp_models
           
-          # 3. Copy files using original names to avoid breaking internal links
-          # The ONNX files are hardcoded to look for their .data sidecars by name.
+          # 2. Copy files EXACTLY as named (must match internal metadata)
           find temp_models -type f \( -name "*FOMMDetector.onnx" -o -name "*FOMMDetector.data" \) -exec cp {} models/ \;
           find temp_models -type f \( -name "*FOMMGenerator.onnx" -o -name "*FOMMGenerator.data" \) -exec cp {} models/ \;
           
-          # 4. Clean up
+          # 3. Clean up
           rm -rf fomm.zip temp_models
           ls -lh models/
 
       - name: Create .nojekyll file
-        run: |
-          # Disable Jekyll so it doesn't process or rename our model files
-          touch .nojekyll
+        run: touch .nojekyll
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
