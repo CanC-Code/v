@@ -2,15 +2,6 @@
 // Finalized inference pipeline for Qualcomm FOMM ONNX assets.
 
 export const IO_CONFIG = {
-  kpDetector: {
-    inputName: "image",
-    outputKeypoints: "keypoints",
-    outputJacobian: "jacobian", 
-  },
-  generator: {
-    inputSource: "image", 
-    output: "image",
-  },
   frameSize: 256,
 };
 
@@ -22,9 +13,6 @@ export function configureOrt() {
   ort.env.wasm.simd = true;
 }
 
-/**
- * Pre-flight check: Verify files exist before ORT tries to load them.
- */
 async function verifyFile(url) {
     const response = await fetch(url, { method: 'HEAD' });
     if (!response.ok) throw new Error(`File not found: ${url} (${response.status})`);
@@ -33,65 +21,67 @@ async function verifyFile(url) {
 
 /**
  * Loads sessions via URL strings.
+ * Includes debug logging to surface initialization errors.
  */
 export async function loadSessions(kpModelUrl, genModelUrl, executionProviders = ["wasm"]) {
-  await verifyFile(kpModelUrl);
-  await verifyFile(genModelUrl);
-  
-  const kpDataFileName = kpModelUrl.split('/').pop().replace('.onnx', '.data');
-  const genDataFileName = genModelUrl.split('/').pop().replace('.onnx', '.data');
+  try {
+    console.log("Starting model initialization...");
+    await verifyFile(kpModelUrl);
+    await verifyFile(genModelUrl);
+    
+    const kpDataFileName = kpModelUrl.split('/').pop().replace('.onnx', '.data');
+    const genDataFileName = genModelUrl.split('/').pop().replace('.onnx', '.data');
 
-  const kpDataUrl = kpModelUrl.replace('.onnx', '.data');
-  const genDataUrl = genModelUrl.replace('.onnx', '.data');
+    const kpDataUrl = kpModelUrl.replace('.onnx', '.data');
+    const genDataUrl = genModelUrl.replace('.onnx', '.data');
 
-  await verifyFile(kpDataUrl);
-  await verifyFile(genDataUrl);
+    await verifyFile(kpDataUrl);
+    await verifyFile(genDataUrl);
 
-  kpSession = await ort.InferenceSession.create(kpModelUrl, { 
-    executionProviders,
-    externalData: [ { path: kpDataFileName, data: kpDataUrl } ]
-  });
-  
-  genSession = await ort.InferenceSession.create(genModelUrl, { 
-    executionProviders,
-    externalData: [ { path: genDataFileName, data: genDataUrl } ]
-  });
+    kpSession = await ort.InferenceSession.create(kpModelUrl, { 
+      executionProviders,
+      externalData: [ { path: kpDataFileName, data: kpDataUrl } ]
+    });
+    
+    genSession = await ort.InferenceSession.create(genModelUrl, { 
+      executionProviders,
+      externalData: [ { path: genDataFileName, data: genDataUrl } ]
+    });
 
-  return { kpSession, genSession };
+    console.log("Model initialization successful.");
+    console.log("Generator Inputs expected:", genSession.inputNames);
+    return { kpSession, genSession };
+  } catch (err) {
+    console.error("Initialization Failed:", err);
+    throw err; // Re-throw so the UI can catch it
+  }
 }
 
 export function isLoaded() {
   return !!(kpSession && genSession);
 }
 
-// DYNAMIC INPUT MAPPING
-// Maps runtime variables to model-specific graph keys
-function buildFeeds(session, mapping) {
+// Builds the feed object by matching available tensors to expected input names
+function buildFeeds(session, tensorMap) {
     const feeds = {};
-    for (const expectedName of session.inputNames) {
-        if (mapping[expectedName] !== undefined && mapping[expectedName] !== null) {
-            feeds[expectedName] = mapping[expectedName];
+    session.inputNames.forEach(name => {
+        if (tensorMap[name]) {
+            feeds[name] = tensorMap[name];
         } else {
-            console.warn(`Model expects input '${expectedName}' but no valid tensor was mapped.`);
+            console.error(`Missing required model input: '${name}'. Check tensor mapping.`);
         }
-    }
+    });
     return feeds;
 }
 
 async function detectKeypoints(frameTensor) {
-  const inputName = kpSession.inputNames[0]; // Usually 'image'
-  const feeds = { [inputName]: frameTensor };
-  const results = await kpSession.run(feeds);
+  const inputName = kpSession.inputNames[0]; 
+  const results = await kpSession.run({ [inputName]: frameTensor });
   
-  // Use the actual output name found in the model
-  const kpKey = kpSession.outputNames[0]; 
+  const kpKey = kpSession.outputNames.find(n => n.includes("keypoint"));
   const jacKey = kpSession.outputNames.find(n => n.includes("jacobian"));
 
-  const kp = results[kpKey];
-  const jac = jacKey ? results[jacKey] : null;
-  
-  if (!kp) throw new Error(`Missing keypoint tensor. Available: ${Object.keys(results)}`);
-  return { kp, jac };
+  return { kp: results[kpKey], jac: jacKey ? results[jacKey] : null };
 }
 
 export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTensor) {
@@ -99,19 +89,14 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
   
   const { kp: drivingKp, jac: drivingJac } = await detectKeypoints(drivingFrameTensor);
   
-  // The generator expects specific naming conventions for the QAI Hub FOMM model
+  // This mapping is now exhaustive to ensure no missing inputs
   const tensorMapping = {
-      // Inputs
       "image": sourceTensor,
       "source_image": sourceTensor,
-      
-      // Keypoints (including the specific _values variations)
       "source_keypoints": sourceKp,
       "source_keypoint_values": sourceKp, 
       "driving_keypoints": drivingKp,
       "driving_keypoint_values": drivingKp,
-      
-      // Jacobians (only passed if they exist)
       "source_jacobian": sourceJac,
       "driving_jacobian": drivingJac
   };
@@ -120,8 +105,5 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
   const results = await genSession.run(feeds);
   
   const outKey = genSession.outputNames[0];
-  const out = results[outKey];
-  
-  if (!out) throw new Error(`Missing output tensor. Available: ${Object.keys(results)}`);
-  return out;
+  return results[outKey];
 }
