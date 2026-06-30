@@ -34,8 +34,8 @@ jobs:
           # 2. Extract into a temporary directory
           unzip -q fomm.zip -d temp_models
           
-          # 3. Use 'find' to locate the specific .onnx and .data files 
-          # This handles cases where files are inside nested subdirectories
+          # 3. Locate files recursively using 'find' to handle nested directory structures.
+          # This ensures we get the .onnx files and their associated .data sidecars.
           find temp_models -type f -name "*FOMMDetector.onnx" -exec cp {} models/kp_detector.onnx \;
           find temp_models -type f -name "*FOMMDetector.data" -exec cp {} models/kp_detector.data \;
           find temp_models -type f -name "*FOMMGenerator.onnx" -exec cp {} models/generator.onnx \;
@@ -44,7 +44,7 @@ jobs:
           # 4. Clean up temporary files
           rm -rf fomm.zip temp_models
           
-          # 5. Verify the files are present
+          # Verify the files are present
           ls -lh models/
 
       - name: Setup Pages
@@ -57,4 +57,4 @@ jobs:
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: deploy-pages@v4
+        uses: actions/deploy-pages@v4
