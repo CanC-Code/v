@@ -1,6 +1,5 @@
 // motion-engine.js
 // Finalized inference pipeline for Qualcomm FOMM ONNX assets.
-// Note: loadSessions now accepts URL strings to enable sidecar file resolution.
 
 export const IO_CONFIG = {
   // IMPORTANT: Verify these names in Netron (https://netron.app) 
@@ -30,13 +29,31 @@ export function configureOrt() {
 }
 
 /**
- * Loads sessions via URL strings. This allows ONNX Runtime to 
- * automatically resolve companion .data files.
+ * Pre-flight check: Verify files exist before ORT tries to load them.
+ */
+async function verifyFile(url) {
+    const response = await fetch(url, { method: 'HEAD' });
+    if (!response.ok) throw new Error(`File not found: ${url} (${response.status})`);
+    return true;
+}
+
+/**
+ * Loads sessions via URL strings.
  */
 export async function loadSessions(kpModelUrl, genModelUrl, executionProviders = ["wasm"]) {
+  // 1. Verify availability first to debug 404s
+  await verifyFile(kpModelUrl);
+  await verifyFile(genModelUrl);
+  
+  // 2. Create sessions
   // ORT uses the URL path to locate the companion .data file in the same directory.
   kpSession = await ort.InferenceSession.create(kpModelUrl, { executionProviders });
   genSession = await ort.InferenceSession.create(genModelUrl, { executionProviders });
+  
+  // Debug: Log the loaded layers
+  console.log("Detector Inputs:", kpSession.inputNames);
+  console.log("Generator Inputs:", genSession.inputNames);
+  
   return { kpSession, genSession };
 }
 
@@ -96,11 +113,9 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
     [IO_CONFIG.generator.inputSource]: sourceTensor,
     [IO_CONFIG.generator.inputKpSource]: sourceKp,
     [IO_CONFIG.generator.inputKpDriving]: drivingKp,
+    [IO_CONFIG.generator.inputJacobianSource]: sourceJac,
+    [IO_CONFIG.generator.inputJacobianDriving]: drivingJac,
   };
-  if (sourceJac && drivingJac) {
-    feeds[IO_CONFIG.generator.inputJacobianSource] = sourceJac;
-    feeds[IO_CONFIG.generator.inputJacobianDriving] = drivingJac;
-  }
 
   const results = await genSession.run(feeds);
   const out = results[IO_CONFIG.generator.output];
