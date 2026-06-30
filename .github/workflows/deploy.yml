@@ -41,8 +41,14 @@ jobs:
           # 4. Clean up temporary files
           rm -rf fomm.zip temp_models
           
-          # Verify files are there
+          # Verify files are there (Ensure FOMMDetector.onnx AND FOMMDetector.data are listed)
           ls -lh models/
+
+      - name: Create .nojekyll file
+        run: |
+          # This tells GitHub Pages NOT to process these files with Jekyll
+          # Jekyll often blocks or renames .data/.onnx files, causing 404s
+          touch .nojekyll
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
