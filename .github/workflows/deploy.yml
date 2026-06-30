@@ -28,20 +28,23 @@ jobs:
         run: |
           mkdir -p models
           
-          # 1. Download the public ONNX asset bundle for FOMM (First Order Motion Model)
+          # 1. Download the public ONNX asset bundle
           wget -qO fomm.zip "https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/fomm/releases/v0.49.1/fomm-onnx-float.zip"
           
           # 2. Extract into a temporary directory
           unzip -q fomm.zip -d temp_models
           
-          # 3. Locate the specific .onnx files and copy them to the models directory with the names the UI expects
-          find temp_models -type f -name "*FOMMDetector.onnx" -exec cp {} models/kp_detector.onnx \;
-          find temp_models -type f -name "*FOMMGenerator.onnx" -exec cp {} models/generator.onnx \;
+          # 3. Copy both .onnx AND .data files. 
+          # We rename them so the ONNX Runtime correctly links the .data sidecar to the .onnx file.
+          cp temp_models/*FOMMDetector.onnx models/kp_detector.onnx
+          cp temp_models/*FOMMDetector.data models/kp_detector.data
+          cp temp_models/*FOMMGenerator.onnx models/generator.onnx
+          cp temp_models/*FOMMGenerator.data models/generator.data
           
-          # 4. Clean up temporary files to keep the GitHub Pages artifact small
+          # 4. Clean up temporary files
           rm -rf fomm.zip temp_models
           
-          # Verify the models were successfully placed
+          # Verify the files are present
           ls -lh models/
 
       - name: Setup Pages
