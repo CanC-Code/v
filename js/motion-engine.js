@@ -1,24 +1,5 @@
 // motion-engine.js
-// Finalized inference pipeline for Qualcomm FOMM ONNX assets.
-
-export const IO_CONFIG = {
-  // Retained structurally for external UI compatibility, but internal 
-  // execution now dynamically binds to the graph's actual requirement strings.
-  kpDetector: {
-    inputName: "image",
-    outputKeypoints: "keypoints",
-    outputJacobian: "jacobian", 
-  },
-  generator: {
-    inputSource: "image", // Corrected default mapping from 'source_image' to 'image'
-    inputKpSource: "source_keypoints",
-    inputKpDriving: "driving_keypoints",
-    inputJacobianSource: "source_jacobian",
-    inputJacobianDriving: "driving_jacobian",
-    output: "image",
-  },
-  frameSize: 256,
-};
+// Finalized inference pipeline using dynamic graph interrogation.
 
 let kpSession = null;
 let genSession = null;
@@ -29,53 +10,26 @@ export function configureOrt() {
 }
 
 /**
- * Pre-flight check: Verify files exist before ORT tries to load them.
- */
-async function verifyFile(url) {
-    const response = await fetch(url, { method: 'HEAD' });
-    if (!response.ok) throw new Error(`File not found: ${url} (${response.status})`);
-    return true;
-}
-
-/**
- * Loads sessions via URL strings.
+ * Loads sessions and automatically logs the exact input/output names
+ * required by the specific .onnx file version.
  */
 export async function loadSessions(kpModelUrl, genModelUrl, executionProviders = ["wasm"]) {
-  // 1. Verify availability first to debug 404s
-  await verifyFile(kpModelUrl);
-  await verifyFile(genModelUrl);
-  
-  // Extract expected external data internal identifiers and target URLs
-  const kpDataFileName = kpModelUrl.split('/').pop().replace('.onnx', '.data');
-  const genDataFileName = genModelUrl.split('/').pop().replace('.onnx', '.data');
-
   const kpDataUrl = kpModelUrl.replace('.onnx', '.data');
   const genDataUrl = genModelUrl.replace('.onnx', '.data');
 
-  // Verify external weight data files are available before ORT loads
-  await verifyFile(kpDataUrl);
-  await verifyFile(genDataUrl);
-
-  // 2. Create sessions with externalData configured to prevent Emscripten FileSystem mount errors
   kpSession = await ort.InferenceSession.create(kpModelUrl, { 
     executionProviders,
-    externalData: [
-      { path: kpDataFileName, data: kpDataUrl }
-    ]
+    externalData: [{ path: kpModelUrl.split('/').pop().replace('.onnx', '.data'), data: kpDataUrl }]
   });
   
   genSession = await ort.InferenceSession.create(genModelUrl, { 
     executionProviders,
-    externalData: [
-      { path: genDataFileName, data: genDataUrl }
-    ]
+    externalData: [{ path: genModelUrl.split('/').pop().replace('.onnx', '.data'), data: genDataUrl }]
   });
 
-  // Debug: Log the loaded layers
-  console.log("Detector Inputs:", kpSession.inputNames);
-  console.log("Detector Outputs:", kpSession.outputNames);
-  console.log("Generator Inputs:", genSession.inputNames);
-  console.log("Generator Outputs:", genSession.outputNames);
+  // CRITICAL: Log these to your browser console to see the exact strings
+  console.log("KP Input Names:", kpSession.inputNames);
+  console.log("Gen Input Names:", genSession.inputNames);
   
   return { kpSession, genSession };
 }
@@ -84,15 +38,13 @@ export function isLoaded() {
   return !!(kpSession && genSession);
 }
 
-export function frameToTensor(canvas, size = IO_CONFIG.frameSize) {
+// Utility to convert canvas to Float32 Tensor
+export function frameToTensor(canvas, size = 256) {
   const off = document.createElement("canvas");
-  off.width = size;
-  off.height = size;
+  off.width = size; off.height = size;
   const ctx = off.getContext("2d");
   ctx.drawImage(canvas, 0, 0, size, size);
-  
   const { data } = ctx.getImageData(0, 0, size, size);
-
   const floatData = new Float32Array(3 * size * size);
   for (let i = 0; i < size * size; i++) {
     floatData[i] = data[i * 4] / 255;
@@ -102,99 +54,34 @@ export function frameToTensor(canvas, size = IO_CONFIG.frameSize) {
   return new ort.Tensor("float32", floatData, [1, 3, size, size]);
 }
 
-export function tensorToImageData(tensor, size = IO_CONFIG.frameSize) {
-  const data = tensor.data;
-  const out = new Uint8ClampedArray(size * size * 4);
-  for (let i = 0; i < size * size; i++) {
-    out[i * 4] = clamp255(data[i] * 255);
-    out[i * 4 + 1] = clamp255(data[size * size + i] * 255);
-    out[i * 4 + 2] = clamp255(data[2 * size * size + i] * 255);
-    out[i * 4 + 3] = 255;
-  }
-  return new ImageData(out, size, size);
-}
-
-function clamp255(v) { return Math.max(0, Math.min(255, v)); }
-
-// DYNAMIC INPUT MAPPING
-// Guarantees we fulfill the ONNX graph requirements regardless of internal metadata naming conventions.
-function buildFeeds(session, mapping) {
-    const feeds = {};
-    for (const expectedName of session.inputNames) {
-        // Ensure we do not push null values (like absent Jacobians) which crash execution.
-        if (mapping[expectedName] !== undefined && mapping[expectedName] !== null) {
-            feeds[expectedName] = mapping[expectedName];
-        } else {
-            console.warn(`Model expects input '${expectedName}' but no valid tensor was mapped.`);
-        }
-    }
-    return feeds;
-}
-
 async function detectKeypoints(frameTensor) {
-  // Determine correct input string dynamically
-  const inputName = kpSession.inputNames.includes("image") ? "image" : 
-                   (kpSession.inputNames.includes("source") ? "source" : IO_CONFIG.kpDetector.inputName);
-                   
-  const feeds = { [inputName]: frameTensor };
+  // Use the first available input name (usually 'image')
+  const feeds = { [kpSession.inputNames[0]]: frameTensor };
   const results = await kpSession.run(feeds);
   
-  // Extract dynamically based on actual output names
-  const kpKey = kpSession.outputNames.find(n => n.includes("keypoint") || n === "kp") || IO_CONFIG.kpDetector.outputKeypoints;
-  const jacKey = kpSession.outputNames.find(n => n.includes("jacobian") || n === "jac");
-
-  const kp = results[kpKey];
-  const jac = jacKey ? results[jacKey] : null;
-  
-  if (!kp) {
-      console.error("Available tensors in KP:", Object.keys(results));
-      throw new Error(`Missing tensor: ${kpKey}`);
-  }
-  return { kp, jac };
+  // Return everything found so we can map it dynamically in runFrame
+  return results; 
 }
 
-export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTensor) {
+export async function runFrame(sourceTensor, sourceKpResult, drivingFrameTensor) {
   if (!isLoaded()) throw new Error("Models not loaded yet.");
   
-  const { kp: drivingKp, jac: drivingJac } = await detectKeypoints(drivingFrameTensor);
+  const drivingKpResult = await detectKeypoints(drivingFrameTensor);
   
-  // Map all known permutations of ONNX inputs to our local variables.
-  // This resolves strict 'image' vs 'source_image' missing feeds errors.
-  const tensorMapping = {
-      // Source Image Variations
-      "image": sourceTensor,
-      "source_image": sourceTensor,
-      "source": sourceTensor,
-      
-      // Keypoint Variations
-      "source_keypoints": sourceKp,
-      "kp_source": sourceKp,
-      "driving_keypoints": drivingKp,
-      "kp_driving": drivingKp,
-      
-      // Jacobian Variations
-      "source_jacobian": sourceJac,
-      "jac_source": sourceJac,
-      "driving_jacobian": drivingJac,
-      "jac_driving": drivingJac
-  };
+  // DYNAMIC MAPPING:
+  // We match our tensor data to the model's expected input names
+  const feeds = {};
+  
+  // Helper to map tensors based on string content
+  const mapTensor = (name, tensor) => { feeds[name] = tensor; };
 
-  // Construct final feeds matching the loaded model precisely
-  const feeds = buildFeeds(genSession, tensorMapping);
+  // Map Source
+  mapTensor(genSession.inputNames.find(n => n.includes("source") || n.includes("image")), sourceTensor);
+  
+  // Map Keypoints (matching 'source_keypoint_values' or similar)
+  mapTensor(genSession.inputNames.find(n => n.includes("source_keypoint")), sourceKpResult[Object.keys(sourceKpResult)[0]]);
+  mapTensor(genSession.inputNames.find(n => n.includes("driving_keypoint")), drivingKpResult[Object.keys(drivingKpResult)[0]]);
 
   const results = await genSession.run(feeds);
-  
-  // Determine correct output key
-  const outKey = genSession.outputNames.find(n => n.includes("image") || n === "prediction") || IO_CONFIG.generator.output;
-  const out = results[outKey];
-  
-  if (!out) {
-      console.error("Available tensors in Generator:", Object.keys(results));
-      throw new Error(`Missing output tensor: ${outKey}`);
-  }
-  return out;
-}
-
-export async function computeSourceKeypoints(sourceTensor) {
-  return detectKeypoints(sourceTensor);
+  return results[genSession.outputNames[0]];
 }
