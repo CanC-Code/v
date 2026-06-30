@@ -24,6 +24,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Fetch Models
+        run: |
+          mkdir -p models
+          # Replace these with the actual direct download links to your ONNX models
+          wget -O models/kp_detector.onnx "https://huggingface.co/YOUR_REPO/resolve/main/kp_detector.onnx"
+          wget -O models/generator.onnx "https://huggingface.co/YOUR_REPO/resolve/main/generator.onnx"
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
