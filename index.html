@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>MotionForge — Local Motion Transfer</title>
-<link rel="stylesheet" href="css/style.css" />
+<link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
 
@@ -18,16 +18,15 @@
   <section class="panel" id="model-panel">
     <h2>1. Model</h2>
     <p>
-      MotionForge needs two ONNX models (a keypoint detector and a generator) to run motion transfer.
-      It does not ship with weights — you provide a URL to a compatible exported model
-      (see <code>README.md</code> for where to find / how to export one). The model is downloaded
+      MotionForge needs two ONNX models (a keypoint detector and a generator) to run motion transfer. 
+      Models are now pre-fetched via GitHub Actions. The model is downloaded
       once and cached in your browser's IndexedDB; after that it works fully offline.
     </p>
     <label>Keypoint detector model URL (.onnx)
-      <input type="text" id="kp-model-url" placeholder="https://.../kp_detector.onnx" />
+      <input type="text" id="kp-model-url" value="./models/kp_detector.onnx" />
     </label>
     <label>Generator model URL (.onnx)
-      <input type="text" id="gen-model-url" placeholder="https://.../generator.onnx" />
+      <input type="text" id="gen-model-url" value="./models/generator.onnx" />
     </label>
     <button id="load-model-btn">Download &amp; Cache Model</button>
     <button id="clear-cache-btn" class="secondary">Clear Cached Models</button>
