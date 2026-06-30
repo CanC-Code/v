@@ -45,12 +45,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   configureOrt();
 
-  // ---------- Model Initialization with Progress ----------
+  // Initialize with Progress
   els.loadBtn.addEventListener("click", async () => {
     els.loadBtn.disabled = true;
     els.progressWrap.classList.remove("hidden");
     els.progressBar.value = 0;
-    els.progressLabel.textContent = "0%";
 
     const updateProgress = (percent, message, isError = false) => {
       els.progressBar.value = percent;
@@ -59,21 +58,24 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     try {
+      // Prefer WebGPU when available
       const providers = ("gpu" in navigator) ? ["webgpu", "wasm"] : ["wasm"];
+      console.log("Providers:", providers);
+
       await loadSessions('./models/FOMMDetector.onnx', './models/FOMMGenerator.onnx', providers, updateProgress);
 
       setStatus(els.modelStatus, `✅ Initialized (${providers.join(", ")})`, "ok");
       updateRunButton();
     } catch (err) {
-      console.error("Initialization error:", err);
+      console.error(err);
       setStatus(els.modelStatus, `Failed: ${err.message}`, "error");
     } finally {
       els.loadBtn.disabled = false;
-      setTimeout(() => els.progressWrap.classList.add("hidden"), 2000);
+      setTimeout(() => els.progressWrap.classList.add("hidden"), 1800);
     }
   });
 
-  // ---------- Input Handling ----------
+  // Input handlers
   els.sourceInput.addEventListener("change", (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -96,7 +98,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }, { once: true });
   });
 
-  // ---------- Generation ----------
+  // Run Generation
   els.runBtn.addEventListener("click", async () => {
     els.runBtn.disabled = true;
     els.progressWrap.classList.remove("hidden");
@@ -109,9 +111,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const video = els.drivingVideo;
       video.pause();
-
-      const fps = 12;
-      const frameCount = Math.max(1, Math.floor(video.duration * fps));
+      const frameCount = Math.max(1, Math.floor(video.duration * 12));
       const sampleCanvas = document.createElement("canvas");
       sampleCanvas.width = sampleCanvas.height = size;
       const sampleCtx = sampleCanvas.getContext("2d");
@@ -129,17 +129,13 @@ document.addEventListener("DOMContentLoaded", () => {
         generatedFrames.push(imageData);
         els.outputCanvas.getContext("2d").putImageData(imageData, 0, 0);
 
-        const pct = Math.round(((i + 1) / frameCount) * 100);
-        els.progressBar.value = pct;
-        els.progressLabel.textContent = `${pct}%`;
-
-        if (outTensor?.dispose) outTensor.dispose();
+        els.progressBar.value = Math.round(((i + 1) / frameCount) * 100);
+        els.progressLabel.textContent = `${Math.round(((i + 1) / frameCount) * 100)}%`;
       }
 
       els.exportBtn.disabled = false;
       setStatus(els.runStatus, "Generation complete.", "ok");
     } catch (err) {
-      console.error(err);
       setStatus(els.runStatus, `Error: ${err.message}`, "error");
     } finally {
       els.runBtn.disabled = false;
@@ -147,17 +143,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // ---------- Export ----------
+  // Export
   els.exportBtn.addEventListener("click", async () => {
     if (generatedFrames.length === 0) return;
     els.exportBtn.disabled = true;
-    setStatus(els.runStatus, "Encoding WebM...", "pending");
+    setStatus(els.runStatus, "Exporting...", "pending");
 
     try {
       const canvas = document.createElement("canvas");
       canvas.width = canvas.height = IO_CONFIG.frameSize;
       const ctx = canvas.getContext("2d");
-
       const stream = canvas.captureStream(12);
       const recorder = new MediaRecorder(stream, { mimeType: "video/webm;codecs=vp9" });
       const chunks = [];
@@ -167,9 +162,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const blob = new Blob(chunks, { type: "video/webm" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        a.href = url;
-        a.download = "motionforge-output.webm";
-        a.click();
+        a.href = url; a.download = "motionforge-output.webm"; a.click();
         URL.revokeObjectURL(url);
         setStatus(els.runStatus, "✅ Exported", "ok");
       };
@@ -177,11 +170,11 @@ document.addEventListener("DOMContentLoaded", () => {
       recorder.start();
       for (const frame of generatedFrames) {
         ctx.putImageData(frame, 0, 0);
-        await new Promise(r => setTimeout(r, 1000 / 12));
+        await new Promise(r => setTimeout(r, 80));
       }
       recorder.stop();
     } catch (err) {
-      setStatus(els.runStatus, `Export failed: ${err.message}`, "error");
+      setStatus(els.runStatus, `Export failed`, "error");
     } finally {
       els.exportBtn.disabled = false;
     }
