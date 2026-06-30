@@ -34,17 +34,14 @@ jobs:
           # 2. Extract into a temporary directory
           unzip -q fomm.zip -d temp_models
           
-          # 3. Locate files recursively using 'find' to handle nested directory structures.
-          # This ensures we get the .onnx files and their associated .data sidecars.
-          find temp_models -type f -name "*FOMMDetector.onnx" -exec cp {} models/kp_detector.onnx \;
-          find temp_models -type f -name "*FOMMDetector.data" -exec cp {} models/kp_detector.data \;
-          find temp_models -type f -name "*FOMMGenerator.onnx" -exec cp {} models/generator.onnx \;
-          find temp_models -type f -name "*FOMMGenerator.data" -exec cp {} models/generator.data \;
+          # 3. Copy files preserving original names (Required for internal .data linking)
+          find temp_models -type f \( -name "*FOMMDetector.onnx" -o -name "*FOMMDetector.data" \) -exec cp {} models/ \;
+          find temp_models -type f \( -name "*FOMMGenerator.onnx" -o -name "*FOMMGenerator.data" \) -exec cp {} models/ \;
           
           # 4. Clean up temporary files
           rm -rf fomm.zip temp_models
           
-          # Verify the files are present
+          # Verify files are there
           ls -lh models/
 
       - name: Setup Pages
