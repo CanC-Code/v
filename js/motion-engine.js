@@ -69,7 +69,11 @@ export function isLoaded() {
 function buildFeeds(session, tensorMap) {
   const feeds = {};
   session.inputNames.forEach(name => {
-    if (tensorMap[name]) feeds[name] = tensorMap[name];
+    if (tensorMap[name]) {
+      feeds[name] = tensorMap[name];
+    } else {
+      console.error(`ERROR: Model requires input '${name}' but not provided`);
+    }
   });
   return feeds;
 }
@@ -84,14 +88,33 @@ async function detectKeypoints(frameTensor) {
 
 export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTensor) {
   if (!isLoaded()) throw new Error("Models not loaded.");
+
   const { kp: drivingKp, jac: drivingJac } = await detectKeypoints(drivingFrameTensor);
 
+  // Expanded mapping to cover all common FOMM input names
   const tensorMapping = {
     "image": sourceTensor,
+    "source_image": sourceTensor,
+    "source": sourceTensor,
+
+    // Keypoints
     "source_keypoints": sourceKp,
+    "source_keypoint_values": sourceKp,      // ← This was missing
+    "kp_source": sourceKp,
+    "source_kp": sourceKp,
+
     "driving_keypoints": drivingKp,
+    "driving_keypoint_values": drivingKp,
+    "kp_driving": drivingKp,
+    "driving_kp": drivingKp,
+
+    // Jacobians
     "source_jacobian": sourceJac,
-    "driving_jacobian": drivingJac
+    "jac_source": sourceJac,
+    "jacobian_source": sourceJac,
+    "driving_jacobian": drivingJac,
+    "jac_driving": drivingJac,
+    "jacobian_driving": drivingJac
   };
 
   const feeds = buildFeeds(genSession, tensorMapping);
@@ -99,6 +122,7 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
   return results[genSession.outputNames[0]];
 }
 
+// Tensor utilities
 export function frameToTensor(canvas, size = 256) {
   const ctx = canvas.getContext("2d");
   const imgData = ctx.getImageData(0, 0, size, size);
