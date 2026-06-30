@@ -9,7 +9,6 @@ import {
   IO_CONFIG,
 } from "./motion-engine.js";
 
-// Ensure DOM is fully loaded before attaching listeners
 document.addEventListener("DOMContentLoaded", () => {
   const $ = (id) => document.getElementById(id);
 
@@ -48,15 +47,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
   els.loadBtn.addEventListener("click", async () => {
     els.loadBtn.disabled = true;
+    setStatus(els.modelStatus, "Initializing...", "pending");
+    
     try {
-      setStatus(els.modelStatus, "Loading models...", "pending");
-      
+      // Direct fetch from local ./models/ folder
       const [kpRes, genRes] = await Promise.all([
         fetch('./models/kp_detector.onnx'),
         fetch('./models/generator.onnx')
       ]);
 
-      if (!kpRes.ok || !genRes.ok) throw new Error("Models not found. Check /models/ folder.");
+      if (!kpRes.ok || !genRes.ok) throw new Error("Models not found in /models/ folder.");
 
       const [kpBytes, genBytes] = await Promise.all([
         kpRes.arrayBuffer(),
@@ -66,17 +66,17 @@ document.addEventListener("DOMContentLoaded", () => {
       const providers = ("gpu" in navigator) ? ["webgpu", "wasm"] : ["wasm"];
       await loadSessions(kpBytes, genBytes, providers);
 
-      setStatus(els.modelStatus, `Initialized via: ${providers.join(", ")}`, "ok");
+      setStatus(els.modelStatus, `Initialized (${providers.join(", ")})`, "ok");
       updateRunButton();
     } catch (err) {
       console.error(err);
-      setStatus(els.modelStatus, `Load error: ${err.message}`, "error");
+      setStatus(els.modelStatus, `Init Error: ${err.message}`, "error");
     } finally {
       els.loadBtn.disabled = false;
     }
   });
 
-  // ---------- Inputs ----------
+  // ---------- Input Handling ----------
 
   els.sourceInput.addEventListener("change", (e) => {
     const file = e.target.files[0];
@@ -101,7 +101,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }, { once: true });
   });
 
-  // ---------- Generation ----------
+  // ---------- Generation Pipeline ----------
 
   els.runBtn.addEventListener("click", async () => {
     els.runBtn.disabled = true;
@@ -115,9 +115,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const video = els.drivingVideo;
       video.pause();
+      video.currentTime = 0;
       
       const fps = 12;
-      const frameCount = Math.floor(video.duration * fps);
+      const frameCount = Math.max(1, Math.floor(video.duration * fps));
       const sampleCanvas = document.createElement("canvas");
       sampleCanvas.width = size;
       sampleCanvas.height = size;
@@ -138,9 +139,10 @@ document.addEventListener("DOMContentLoaded", () => {
         els.progressLabel.textContent = `${pct}%`;
       }
       els.exportBtn.disabled = false;
-      setStatus(els.runStatus, "Done.", "ok");
+      setStatus(els.runStatus, "Generation complete.", "ok");
     } catch (err) {
-      setStatus(els.runStatus, err.message, "error");
+      console.error(err);
+      setStatus(els.runStatus, `Error: ${err.message}`, "error");
     } finally {
       els.runBtn.disabled = false;
     }
