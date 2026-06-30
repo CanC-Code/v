@@ -1,6 +1,4 @@
 // motion-engine.js
-// Finalized inference pipeline for Qualcomm FOMM ONNX assets.
-
 export const IO_CONFIG = {
   frameSize: 256,
 };
@@ -9,22 +7,15 @@ let kpSession = null;
 let genSession = null;
 
 export function configureOrt() {
-  // Performance tuning
-  ort.env.wasm.numThreads = 4; // Reduced for faster init on most devices
+  ort.env.wasm.numThreads = 4;
   ort.env.wasm.simd = true;
-  ort.env.logLevel = 'warning'; // Less verbose
+  ort.env.logLevel = 'warning';
 }
 
 async function verifyFile(url) {
-  try {
-    const response = await fetch(url, { method: 'HEAD' });
-    if (!response.ok) throw new Error(`File not found: ${url} (HTTP ${response.status})`);
-    console.log(`✓ Verified: ${url}`);
-    return true;
-  } catch (err) {
-    console.error(`✗ Verify failed: ${url}`, err.message);
-    throw err;
-  }
+  const response = await fetch(url, { method: 'HEAD' });
+  if (!response.ok) throw new Error(`File not found: ${url}`);
+  console.log(`✓ Verified: ${url}`);
 }
 
 export async function loadSessions(kpModelUrl, genModelUrl, executionProviders = ["wasm"], onProgress = null) {
@@ -42,31 +33,30 @@ export async function loadSessions(kpModelUrl, genModelUrl, executionProviders =
     await verifyFile(kpDataUrl);
     await verifyFile(genDataUrl);
 
-    if (onProgress) onProgress(40, "Loading KP Detector...");
+    if (onProgress) onProgress(40, "Creating KP Detector session...");
 
     const kpDataPath = kpModelUrl.split('/').pop().replace('.onnx', '.data');
     const genDataPath = genModelUrl.split('/').pop().replace('.onnx', '.data');
 
-    kpSession = await ort.InferenceSession.create(kpModelUrl, { 
+    kpSession = await ort.InferenceSession.create(kpModelUrl, {
       executionProviders,
       externalData: [{ path: kpDataPath, data: kpDataUrl }],
       graphOptimizationLevel: 'all'
     });
 
-    if (onProgress) onProgress(75, "Loading Generator...");
+    if (onProgress) onProgress(75, "Creating Generator session (this may take a while)...");
 
-    genSession = await ort.InferenceSession.create(genModelUrl, { 
+    genSession = await ort.InferenceSession.create(genModelUrl, {
       executionProviders,
       externalData: [{ path: genDataPath, data: genDataUrl }],
       graphOptimizationLevel: 'all'
     });
 
     if (onProgress) onProgress(100, "✅ Models ready");
-
-    console.log("✅ Initialization complete.");
+    console.log("✅ Initialization successful");
     return { kpSession, genSession };
   } catch (err) {
-    console.error("❌ Failed:", err);
+    console.error("❌ Load failed:", err);
     if (onProgress) onProgress(0, `❌ ${err.message}`, true);
     throw err;
   }
@@ -97,10 +87,11 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
   const { kp: drivingKp, jac: drivingJac } = await detectKeypoints(drivingFrameTensor);
 
   const tensorMapping = {
-    "image": sourceTensor, "source_image": sourceTensor,
-    "source_keypoints": sourceKp, "kp_source": sourceKp,
-    "driving_keypoints": drivingKp, "kp_driving": drivingKp,
-    "source_jacobian": sourceJac, "driving_jacobian": drivingJac
+    "image": sourceTensor,
+    "source_keypoints": sourceKp,
+    "driving_keypoints": drivingKp,
+    "source_jacobian": sourceJac,
+    "driving_jacobian": drivingJac
   };
 
   const feeds = buildFeeds(genSession, tensorMapping);
@@ -108,13 +99,11 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
   return results[genSession.outputNames[0]];
 }
 
-// Tensor Utils
 export function frameToTensor(canvas, size = 256) {
   const ctx = canvas.getContext("2d");
   const imgData = ctx.getImageData(0, 0, size, size);
   const data = imgData.data;
   const tensorData = new Float32Array(size * size * 3);
-
   for (let i = 0; i < size * size; i++) {
     const j = i * 4;
     tensorData[i] = data[j] / 255;
