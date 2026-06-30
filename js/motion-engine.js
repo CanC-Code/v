@@ -68,11 +68,8 @@ export function isLoaded() {
 function buildFeeds(session, tensorMap) {
   const feeds = {};
   session.inputNames.forEach(name => {
-    if (tensorMap[name]) {
-      feeds[name] = tensorMap[name];
-    } else {
-      console.error(`Missing input: ${name}`);
-    }
+    if (tensorMap[name]) feeds[name] = tensorMap[name];
+    else console.error(`Missing input: ${name}`);
   });
   return feeds;
 }
@@ -90,29 +87,25 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
 
   const { kp: drivingKp, jac: drivingJac } = await detectKeypoints(drivingFrameTensor);
 
-  // Comprehensive mapping for Qualcomm FOMM
   const tensorMapping = {
     "image": sourceTensor,
     "source_image": sourceTensor,
     "source": sourceTensor,
 
-    // Keypoints
     "source_keypoints": sourceKp,
     "source_keypoint_values": sourceKp,
     "kp_source": sourceKp,
     "source_kp": sourceKp,
     "kp_norm_values": sourceKp,
 
-    // Driving Keypoints
     "driving_keypoints": drivingKp,
     "driving_keypoint_values": drivingKp,
     "kp_driving": drivingKp,
     "driving_kp": drivingKp,
 
-    // Jacobians
     "source_jacobian": sourceJac,
     "source_keypoint_jacobians": sourceJac,
-    "kp_norm_jacobians": sourceJac,           // ← Fixed this error
+    "kp_norm_jacobians": sourceJac,
     "jac_source": sourceJac,
     "jacobian_source": sourceJac,
 
@@ -127,7 +120,6 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
   return results[genSession.outputNames[0]];
 }
 
-// Tensor Utilities
 export function frameToTensor(canvas, size = 256) {
   const ctx = canvas.getContext("2d");
   const imgData = ctx.getImageData(0, 0, size, size);
@@ -147,9 +139,9 @@ export function tensorToImageData(tensor, size = 256) {
   const out = new Uint8ClampedArray(size * size * 4);
   for (let i = 0; i < size * size; i++) {
     const idx = i * 4;
-    out[idx] = Math.round(data[i] * 255);
-    out[idx+1] = Math.round(data[i + size*size] * 255);
-    out[idx+2] = Math.round(data[i + size*size*2] * 255);
+    out[idx] = Math.min(255, Math.max(0, Math.round(data[i] * 255)));
+    out[idx+1] = Math.min(255, Math.max(0, Math.round(data[i + size*size] * 255)));
+    out[idx+2] = Math.min(255, Math.max(0, Math.round(data[i + size*size*2] * 255)));
     out[idx+3] = 255;
   }
   return new ImageData(out, size, size);
