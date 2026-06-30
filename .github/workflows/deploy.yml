@@ -34,17 +34,17 @@ jobs:
           # 2. Extract into a temporary directory
           unzip -q fomm.zip -d temp_models
           
-          # 3. Copy both .onnx AND .data files. 
-          # We rename them so the ONNX Runtime correctly links the .data sidecar to the .onnx file.
-          cp temp_models/*FOMMDetector.onnx models/kp_detector.onnx
-          cp temp_models/*FOMMDetector.data models/kp_detector.data
-          cp temp_models/*FOMMGenerator.onnx models/generator.onnx
-          cp temp_models/*FOMMGenerator.data models/generator.data
+          # 3. Use 'find' to locate the specific .onnx and .data files 
+          # This handles cases where files are inside nested subdirectories
+          find temp_models -type f -name "*FOMMDetector.onnx" -exec cp {} models/kp_detector.onnx \;
+          find temp_models -type f -name "*FOMMDetector.data" -exec cp {} models/kp_detector.data \;
+          find temp_models -type f -name "*FOMMGenerator.onnx" -exec cp {} models/generator.onnx \;
+          find temp_models -type f -name "*FOMMGenerator.data" -exec cp {} models/generator.data \;
           
           # 4. Clean up temporary files
           rm -rf fomm.zip temp_models
           
-          # Verify the files are present
+          # 5. Verify the files are present
           ls -lh models/
 
       - name: Setup Pages
@@ -57,4 +57,4 @@ jobs:
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: deploy-pages@v4
