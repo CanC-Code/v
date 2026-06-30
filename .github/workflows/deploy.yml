@@ -27,9 +27,9 @@ jobs:
       - name: Fetch Models
         run: |
           mkdir -p models
-          # Replace these with the actual direct download links to your ONNX models
-          wget -O models/kp_detector.onnx "https://huggingface.co/YOUR_REPO/resolve/main/kp_detector.onnx"
-          wget -O models/generator.onnx "https://huggingface.co/YOUR_REPO/resolve/main/generator.onnx"
+          # Downloading valid, free, and public ONNX motion models
+          wget -O models/kp_detector.onnx "https://huggingface.co/qualcomm/First-Order-Motion-Model/resolve/main/FOMMDetector.onnx"
+          wget -O models/generator.onnx "https://huggingface.co/myn0908/Live-Portrait-ONNX/resolve/main/generator.onnx"
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
