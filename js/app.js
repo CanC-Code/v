@@ -47,24 +47,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   els.loadBtn.addEventListener("click", async () => {
     els.loadBtn.disabled = true;
-    setStatus(els.modelStatus, "Initializing...", "pending");
-    
+    setStatus(els.modelStatus, "Initializing models (please wait)...", "pending");
+
     try {
-      // Direct fetch from local ./models/ folder
-      const [kpRes, genRes] = await Promise.all([
-        fetch('./models/kp_detector.onnx'),
-        fetch('./models/generator.onnx')
-      ]);
-
-      if (!kpRes.ok || !genRes.ok) throw new Error("Models not found in /models/ folder.");
-
-      const [kpBytes, genBytes] = await Promise.all([
-        kpRes.arrayBuffer(),
-        genRes.arrayBuffer()
-      ]);
-
+      // Pass paths directly. ONNX Runtime will fetch .onnx AND companion .data files.
       const providers = ("gpu" in navigator) ? ["webgpu", "wasm"] : ["wasm"];
-      await loadSessions(kpBytes, genBytes, providers);
+      await loadSessions('./models/kp_detector.onnx', './models/generator.onnx', providers);
 
       setStatus(els.modelStatus, `Initialized (${providers.join(", ")})`, "ok");
       updateRunButton();
@@ -107,7 +95,7 @@ document.addEventListener("DOMContentLoaded", () => {
     els.runBtn.disabled = true;
     els.progressWrap.classList.remove("hidden");
     generatedFrames = [];
-    
+
     try {
       const size = IO_CONFIG.frameSize;
       const sourceTensor = frameToTensor(els.sourceCanvas, size);
@@ -116,7 +104,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const video = els.drivingVideo;
       video.pause();
       video.currentTime = 0;
-      
+
       const fps = 12;
       const frameCount = Math.max(1, Math.floor(video.duration * fps));
       const sampleCanvas = document.createElement("canvas");
@@ -129,7 +117,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         sampleCanvas.getContext("2d").drawImage(video, 0, 0, size, size);
         const outTensor = await runFrame(sourceTensor, sourceKp, sourceJac, frameToTensor(sampleCanvas, size));
-        
+
         const imageData = tensorToImageData(outTensor, size);
         generatedFrames.push(imageData);
         els.outputCanvas.getContext("2d").putImageData(imageData, 0, 0);
@@ -145,6 +133,49 @@ document.addEventListener("DOMContentLoaded", () => {
       setStatus(els.runStatus, `Error: ${err.message}`, "error");
     } finally {
       els.runBtn.disabled = false;
+    }
+  });
+
+  // ---------- Export Logic ----------
+
+  els.exportBtn.addEventListener("click", async () => {
+    if (generatedFrames.length === 0) return;
+    els.exportBtn.disabled = true;
+    setStatus(els.runStatus, "Encoding WebM...", "pending");
+
+    try {
+      const size = IO_CONFIG.frameSize;
+      const exportCanvas = document.createElement("canvas");
+      exportCanvas.width = size;
+      exportCanvas.height = size;
+      const exportCtx = exportCanvas.getContext("2d");
+
+      const stream = exportCanvas.captureStream(12);
+      const recorder = new MediaRecorder(stream, { mimeType: "video/webm;codecs=vp9" });
+      const chunks = [];
+      recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: "video/webm" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "motionforge-output.webm";
+        a.click();
+        URL.revokeObjectURL(url);
+        setStatus(els.runStatus, "Exported.", "ok");
+      };
+
+      recorder.start();
+      for (const frame of generatedFrames) {
+        exportCtx.putImageData(frame, 0, 0);
+        await new Promise((r) => setTimeout(r, 1000 / 12));
+      }
+      recorder.stop();
+    } catch (err) {
+      console.error(err);
+      setStatus(els.runStatus, `Export failed: ${err.message}`, "error");
+    } finally {
+      els.exportBtn.disabled = false;
     }
   });
 });
