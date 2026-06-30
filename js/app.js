@@ -35,38 +35,45 @@ document.addEventListener("DOMContentLoaded", () => {
   let generatedFrames = [];
 
   function setStatus(el, msg, kind = "info") {
-    console.log(`Status [${kind}]: ${msg}`);
     el.textContent = msg;
     el.className = "status" + (kind ? ` ${kind}` : "");
   }
 
   function updateRunButton() {
-    const ready = isLoaded() && sourceReady && drivingReady;
-    els.runBtn.disabled = !ready;
+    els.runBtn.disabled = !(isLoaded() && sourceReady && drivingReady);
   }
 
   configureOrt();
 
-  // Model Initialization
+  // ---------- Model Initialization with Progress ----------
   els.loadBtn.addEventListener("click", async () => {
     els.loadBtn.disabled = true;
-    setStatus(els.modelStatus, "Loading models...", "pending");
+    els.progressWrap.classList.remove("hidden");
+    els.progressBar.value = 0;
+    els.progressLabel.textContent = "0%";
+
+    const updateProgress = (percent, message, isError = false) => {
+      els.progressBar.value = percent;
+      els.progressLabel.textContent = `${Math.round(percent)}%`;
+      setStatus(els.modelStatus, message, isError ? "error" : "pending");
+    };
 
     try {
       const providers = ("gpu" in navigator) ? ["webgpu", "wasm"] : ["wasm"];
-      await loadSessions('./models/FOMMDetector.onnx', './models/FOMMGenerator.onnx', providers);
+      await loadSessions('./models/FOMMDetector.onnx', './models/FOMMGenerator.onnx', providers, updateProgress);
 
       setStatus(els.modelStatus, `✅ Initialized (${providers.join(", ")})`, "ok");
       updateRunButton();
     } catch (err) {
-      console.error("Init error:", err);
-      setStatus(els.modelStatus, `Error: ${err.message}`, "error");
+      console.error("Initialization error:", err);
+      setStatus(els.modelStatus, `Failed: ${err.message}`, "error");
     } finally {
       els.loadBtn.disabled = false;
+      setTimeout(() => els.progressWrap.classList.add("hidden"), 2000);
     }
   });
 
-  // Input Handling
+  // ---------- Input Handling ----------
   els.sourceInput.addEventListener("change", (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -89,7 +96,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }, { once: true });
   });
 
-  // Generation
+  // ---------- Generation ----------
   els.runBtn.addEventListener("click", async () => {
     els.runBtn.disabled = true;
     els.progressWrap.classList.remove("hidden");
@@ -106,13 +113,12 @@ document.addEventListener("DOMContentLoaded", () => {
       const fps = 12;
       const frameCount = Math.max(1, Math.floor(video.duration * fps));
       const sampleCanvas = document.createElement("canvas");
-      sampleCanvas.width = size;
-      sampleCanvas.height = size;
+      sampleCanvas.width = sampleCanvas.height = size;
       const sampleCtx = sampleCanvas.getContext("2d");
 
       for (let i = 0; i < frameCount; i++) {
         video.currentTime = (i / frameCount) * video.duration;
-        await new Promise(r => { video.onseeked = r; });
+        await new Promise(r => video.onseeked = r);
 
         sampleCtx.drawImage(video, 0, 0, size, size);
 
@@ -128,24 +134,24 @@ document.addEventListener("DOMContentLoaded", () => {
         els.progressLabel.textContent = `${pct}%`;
 
         if (outTensor?.dispose) outTensor.dispose();
-        if (drivingTensor?.dispose) drivingTensor.dispose();
       }
 
       els.exportBtn.disabled = false;
       setStatus(els.runStatus, "Generation complete.", "ok");
     } catch (err) {
-      console.error("Generation error:", err);
+      console.error(err);
       setStatus(els.runStatus, `Error: ${err.message}`, "error");
     } finally {
       els.runBtn.disabled = false;
+      setTimeout(() => els.progressWrap.classList.add("hidden"), 1000);
     }
   });
 
-  // Export
+  // ---------- Export ----------
   els.exportBtn.addEventListener("click", async () => {
     if (generatedFrames.length === 0) return;
     els.exportBtn.disabled = true;
-    setStatus(els.runStatus, "Exporting WebM...", "pending");
+    setStatus(els.runStatus, "Encoding WebM...", "pending");
 
     try {
       const canvas = document.createElement("canvas");
@@ -161,7 +167,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const blob = new Blob(chunks, { type: "video/webm" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        a.href = url; a.download = "motionforge.webm"; a.click();
+        a.href = url;
+        a.download = "motionforge-output.webm";
+        a.click();
         URL.revokeObjectURL(url);
         setStatus(els.runStatus, "✅ Exported", "ok");
       };
@@ -169,7 +177,7 @@ document.addEventListener("DOMContentLoaded", () => {
       recorder.start();
       for (const frame of generatedFrames) {
         ctx.putImageData(frame, 0, 0);
-        await new Promise(r => setTimeout(r, 1000/12));
+        await new Promise(r => setTimeout(r, 1000 / 12));
       }
       recorder.stop();
     } catch (err) {
