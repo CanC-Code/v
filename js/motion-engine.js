@@ -43,7 +43,6 @@ export async function loadSessions(kpModelUrl, genModelUrl, executionProviders =
     await verifyFile(kpDataUrl);
     await verifyFile(genDataUrl);
 
-    // Must match the "location" stored inside the .onnx protobuf
     const kpDataPath = kpModelUrl.split('/').pop().replace('.onnx', '.data');
     const genDataPath = genModelUrl.split('/').pop().replace('.onnx', '.data');
 
@@ -51,18 +50,12 @@ export async function loadSessions(kpModelUrl, genModelUrl, executionProviders =
 
     kpSession = await ort.InferenceSession.create(kpModelUrl, { 
       executionProviders,
-      externalData: [{ 
-        path: kpDataPath, 
-        data: kpDataUrl 
-      }]
+      externalData: [{ path: kpDataPath, data: kpDataUrl }]
     });
 
     genSession = await ort.InferenceSession.create(genModelUrl, { 
       executionProviders,
-      externalData: [{ 
-        path: genDataPath, 
-        data: genDataUrl 
-      }]
+      externalData: [{ path: genDataPath, data: genDataUrl }]
     });
 
     console.log("✅ Model initialization successful.");
@@ -142,21 +135,39 @@ export async function runFrame(sourceTensor, sourceKp, sourceJac, drivingFrameTe
   return results[outKey];
 }
 
-// Placeholder - implement these or keep your existing implementations
-export function frameToTensor(canvas, size) {
-  // TODO: your canvas → tensor conversion
-  console.warn("frameToTensor not fully implemented in this snippet");
-  return null;
+// === Tensor Utilities (CH4N) ===
+export function frameToTensor(canvas, size = 256) {
+  const ctx = canvas.getContext("2d");
+  const imageData = ctx.getImageData(0, 0, size, size);
+  const data = imageData.data;
+
+  // NHWC -> NCHW, normalized [0,1] as float32
+  const tensorData = new Float32Array(size * size * 3);
+  for (let i = 0; i < size * size; i++) {
+    tensorData[i] = data[i * 4] / 255;           // R
+    tensorData[i + size * size] = data[i * 4 + 1] / 255; // G
+    tensorData[i + size * size * 2] = data[i * 4 + 2] / 255; // B
+  }
+
+  return new ort.Tensor("float32", tensorData, [1, 3, size, size]);
 }
 
-export function tensorToImageData(tensor, size) {
-  // TODO: your tensor → ImageData conversion
-  console.warn("tensorToImageData not fully implemented in this snippet");
-  return new ImageData(new Uint8ClampedArray(size * size * 4), size, size);
+export function tensorToImageData(tensor, size = 256) {
+  const data = tensor.data;
+  const imageData = new Uint8ClampedArray(size * size * 4);
+
+  for (let i = 0; i < size * size; i++) {
+    const idx = i * 4;
+    imageData[idx]     = Math.round(data[i] * 255);           // R
+    imageData[idx + 1] = Math.round(data[i + size*size] * 255);     // G
+    imageData[idx + 2] = Math.round(data[i + size*size*2] * 255);   // B
+    imageData[idx + 3] = 255; // Alpha
+  }
+
+  return new ImageData(imageData, size, size);
 }
 
 export async function computeSourceKeypoints(sourceTensor) {
-  // TODO: implement if needed
-  console.warn("computeSourceKeypoints placeholder");
-  return { kp: null, jac: null };
+  if (!isLoaded()) throw new Error("Models not loaded");
+  return await detectKeypoints(sourceTensor);
 }
