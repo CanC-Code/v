@@ -2,20 +2,19 @@
 // Finalized inference pipeline for Qualcomm FOMM ONNX assets.
 
 export const IO_CONFIG = {
-  // IMPORTANT: Verify these names in Netron (https://netron.app) 
-  // if you get "Missing tensor" errors.
+  // Corrected tensor names to match QAI Hub v0.49.1 FOMM models
   kpDetector: {
-    inputName: "source",
-    outputKeypoints: "kp",
-    outputJacobian: "jac",
+    inputName: "image",
+    outputKeypoints: "keypoints",
+    outputJacobian: "jacobian", 
   },
   generator: {
-    inputSource: "source",
-    inputKpSource: "kp_source",
-    inputKpDriving: "kp_driving",
-    inputJacobianSource: "jac_source",
-    inputJacobianDriving: "jac_driving",
-    output: "prediction",
+    inputSource: "source_image",
+    inputKpSource: "source_keypoints",
+    inputKpDriving: "driving_keypoints",
+    inputJacobianSource: "source_jacobian",
+    inputJacobianDriving: "driving_jacobian",
+    output: "image",
   },
   frameSize: 256,
 };
