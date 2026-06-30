@@ -47,19 +47,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
   els.loadBtn.addEventListener("click", async () => {
     els.loadBtn.disabled = true;
-    setStatus(els.modelStatus, "Initializing models (please wait)...", "pending");
+    setStatus(els.modelStatus, "Loading models (approx 50MB)...", "pending");
 
     try {
-      // Use original filenames. ORT will now correctly resolve FOMMDetector.onnx + FOMMDetector.data
       const providers = ("gpu" in navigator) ? ["webgpu", "wasm"] : ["wasm"];
       
+      // Load using original filenames to ensure sidecar linking
       await loadSessions('./models/FOMMDetector.onnx', './models/FOMMGenerator.onnx', providers);
 
       setStatus(els.modelStatus, `Initialized (${providers.join(", ")})`, "ok");
       updateRunButton();
+      console.log("Model session created successfully.");
     } catch (err) {
-      console.error(err);
-      setStatus(els.modelStatus, `Init Error: ${err.message}`, "error");
+      console.error("Initialization error:", err);
+      setStatus(els.modelStatus, `Load Error: ${err.message}`, "error");
     } finally {
       els.loadBtn.disabled = false;
     }
@@ -96,44 +97,55 @@ document.addEventListener("DOMContentLoaded", () => {
     els.runBtn.disabled = true;
     els.progressWrap.classList.remove("hidden");
     generatedFrames = [];
-
+    
+    console.time("TotalGeneration");
     try {
       const size = IO_CONFIG.frameSize;
       const sourceTensor = frameToTensor(els.sourceCanvas, size);
+      
+      // Pre-compute source keypoints
       const { kp: sourceKp, jac: sourceJac } = await computeSourceKeypoints(sourceTensor);
 
       const video = els.drivingVideo;
       video.pause();
-      video.currentTime = 0;
-
+      
       const fps = 12;
       const frameCount = Math.max(1, Math.floor(video.duration * fps));
       const sampleCanvas = document.createElement("canvas");
       sampleCanvas.width = size;
       sampleCanvas.height = size;
+      const sampleCtx = sampleCanvas.getContext("2d");
 
       for (let i = 0; i < frameCount; i++) {
         video.currentTime = (i / frameCount) * video.duration;
         await new Promise(r => video.onseeked = r);
 
-        sampleCanvas.getContext("2d").drawImage(video, 0, 0, size, size);
+        sampleCtx.drawImage(video, 0, 0, size, size);
+        
+        // Run inference
         const outTensor = await runFrame(sourceTensor, sourceKp, sourceJac, frameToTensor(sampleCanvas, size));
-
+        
         const imageData = tensorToImageData(outTensor, size);
         generatedFrames.push(imageData);
         els.outputCanvas.getContext("2d").putImageData(imageData, 0, 0);
 
+        // Update UI
         const pct = Math.round(((i + 1) / frameCount) * 100);
         els.progressBar.value = pct;
         els.progressLabel.textContent = `${pct}%`;
+        
+        // Clean up tensors to prevent memory leaks if supported
+        if (outTensor && typeof outTensor.dispose === 'function') outTensor.dispose();
       }
+      
       els.exportBtn.disabled = false;
       setStatus(els.runStatus, "Generation complete.", "ok");
     } catch (err) {
-      console.error(err);
+      console.error("Generation error:", err);
       setStatus(els.runStatus, `Error: ${err.message}`, "error");
     } finally {
       els.runBtn.disabled = false;
+      console.timeEnd("TotalGeneration");
     }
   });
 
@@ -145,15 +157,15 @@ document.addEventListener("DOMContentLoaded", () => {
     setStatus(els.runStatus, "Encoding WebM...", "pending");
 
     try {
-      const size = IO_CONFIG.frameSize;
       const exportCanvas = document.createElement("canvas");
-      exportCanvas.width = size;
-      exportCanvas.height = size;
+      exportCanvas.width = IO_CONFIG.frameSize;
+      exportCanvas.height = IO_CONFIG.frameSize;
       const exportCtx = exportCanvas.getContext("2d");
 
       const stream = exportCanvas.captureStream(12);
       const recorder = new MediaRecorder(stream, { mimeType: "video/webm;codecs=vp9" });
       const chunks = [];
+      
       recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
       recorder.onstop = () => {
         const blob = new Blob(chunks, { type: "video/webm" });
@@ -173,7 +185,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       recorder.stop();
     } catch (err) {
-      console.error(err);
+      console.error("Export error:", err);
       setStatus(els.runStatus, `Export failed: ${err.message}`, "error");
     } finally {
       els.exportBtn.disabled = false;
