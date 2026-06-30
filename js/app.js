@@ -45,7 +45,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   configureOrt();
 
-  // Model Load
+  // Model Initialization (unchanged)
   els.loadBtn.addEventListener("click", async () => {
     els.loadBtn.disabled = true;
     els.progressWrap.classList.remove("hidden");
@@ -68,7 +68,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Inputs
+  // Input handlers (unchanged)
   els.sourceInput.addEventListener("change", e => {
     const file = e.target.files[0];
     if (!file) return;
@@ -91,12 +91,11 @@ document.addEventListener("DOMContentLoaded", () => {
     }, { once: true });
   });
 
-  // Generation with better feedback
+  // Generation with frame counter
   els.runBtn.addEventListener("click", async () => {
     els.runBtn.disabled = true;
     els.progressWrap.classList.remove("hidden");
     generatedFrames = [];
-    setStatus(els.runStatus, "Starting generation...", "pending");
 
     try {
       const size = IO_CONFIG.frameSize;
@@ -110,7 +109,7 @@ document.addEventListener("DOMContentLoaded", () => {
       sampleCanvas.width = sampleCanvas.height = size;
       const sampleCtx = sampleCanvas.getContext("2d");
 
-      setStatus(els.runStatus, `Generating ${frameCount} frames...`, "pending");
+      setStatus(els.runStatus, `Generating ${frameCount} frames... (this will take a while)`, "pending");
 
       for (let i = 0; i < frameCount; i++) {
         video.currentTime = (i / frameCount) * video.duration;
@@ -128,24 +127,27 @@ document.addEventListener("DOMContentLoaded", () => {
         const pct = Math.round(((i + 1) / frameCount) * 100);
         els.progressBar.value = pct;
         els.progressLabel.textContent = `${pct}%`;
+
+        // Live status
+        setStatus(els.runStatus, `Generating frame ${i+1}/${frameCount}...`, "pending");
       }
 
       els.exportBtn.disabled = false;
-      setStatus(els.runStatus, `✅ Generation complete (${generatedFrames.length} frames)`, "ok");
+      setStatus(els.runStatus, `✅ Generation complete! ${generatedFrames.length} frames ready.`, "ok");
     } catch (err) {
       console.error(err);
       setStatus(els.runStatus, `Generation failed: ${err.message}`, "error");
     } finally {
       els.runBtn.disabled = false;
-      setTimeout(() => els.progressWrap.classList.add("hidden"), 1200);
+      setTimeout(() => els.progressWrap.classList.add("hidden"), 1500);
     }
   });
 
-  // Export
+  // Export (unchanged)
   els.exportBtn.addEventListener("click", async () => {
     if (generatedFrames.length === 0) return;
     els.exportBtn.disabled = true;
-    setStatus(els.runStatus, "Encoding video...", "pending");
+    setStatus(els.runStatus, "Encoding WebM video...", "pending");
 
     try {
       const canvas = document.createElement("canvas");
@@ -160,9 +162,11 @@ document.addEventListener("DOMContentLoaded", () => {
         const blob = new Blob(chunks, { type: "video/webm" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        a.href = url; a.download = "motionforge-output.webm"; a.click();
+        a.href = url;
+        a.download = "motionforge-output.webm";
+        a.click();
         URL.revokeObjectURL(url);
-        setStatus(els.runStatus, "✅ Video exported!", "ok");
+        setStatus(els.runStatus, "✅ Video exported successfully!", "ok");
       };
 
       recorder.start();
