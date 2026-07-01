@@ -5,8 +5,17 @@ project("motionforge_native")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find the ONNX Runtime package provided by the AAR via Prefab
-find_package(onnxruntime REQUIRED CONFIG)
+# Point to the manually extracted ONNX Runtime directory
+set(ONNX_RUNTIME_DIR ${CMAKE_CURRENT_SOURCE_DIR}/onnxruntime)
+
+# Include ONNX headers
+include_directories(${ONNX_RUNTIME_DIR}/include)
+
+# Add ONNX Runtime as an IMPORTED shared library
+add_library(onnxruntime SHARED IMPORTED)
+set_target_properties(onnxruntime PROPERTIES
+    IMPORTED_LOCATION ${ONNX_RUNTIME_DIR}/lib/${ANDROID_ABI}/libonnxruntime.so
+)
 
 # Find Android-specific libraries for logging and Bitmap manipulation
 find_library(log-lib log)
@@ -17,8 +26,8 @@ add_library(motionforge_engine SHARED
             native_bridge.cpp
             fomm_engine.cpp)
 
-# Link dependencies
+# Link the imported libraries against the engine
 target_link_libraries(motionforge_engine
-                      onnxruntime::onnxruntime
+                      onnxruntime
                       ${log-lib}
                       ${jnigraphics-lib})
