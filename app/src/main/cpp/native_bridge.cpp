@@ -13,6 +13,8 @@ extern "C"
 JNIEXPORT jboolean JNICALL
 Java_com_motionforge_app_FommEngineWrapper_initialize(JNIEnv* env, jobject /* this */, jstring kpModelPath, jstring genModelPath) {
     try {
+        if (!kpModelPath || !genModelPath) return JNI_FALSE;
+        
         std::string kpPath = jstringToString(env, kpModelPath);
         std::string genPath = jstringToString(env, genModelPath);
 
@@ -36,15 +38,24 @@ Java_com_motionforge_app_FommEngineWrapper_processFrame(JNIEnv* env, jobject /* 
         return JNI_FALSE;
     }
 
-    // Grab array pointers directly from the JVM
+    if (!sourcePixels || !drivingPixels || !outputPixels) {
+        __android_log_print(ANDROID_LOG_ERROR, "native_bridge", "Null array provided to JNI");
+        return JNI_FALSE;
+    }
+
     jbyte* srcPtr = env->GetByteArrayElements(sourcePixels, nullptr);
     jbyte* drvPtr = env->GetByteArrayElements(drivingPixels, nullptr);
     jbyte* outPtr = env->GetByteArrayElements(outputPixels, nullptr);
 
+    if (!srcPtr || !drvPtr || !outPtr) {
+        if (srcPtr) env->ReleaseByteArrayElements(sourcePixels, srcPtr, JNI_ABORT);
+        if (drvPtr) env->ReleaseByteArrayElements(drivingPixels, drvPtr, JNI_ABORT);
+        if (outPtr) env->ReleaseByteArrayElements(outputPixels, outPtr, JNI_ABORT);
+        return JNI_FALSE;
+    }
+
     bool success = gFommEngine->processFrame(srcPtr, drvPtr, outPtr, width, height);
 
-    // REQUIRED: Release the JNI arrays to prevent memory leaks and GC crashes
-    // Use JNI_ABORT for read-only inputs to avoid copying memory back, and 0 for output to save the changes.
     env->ReleaseByteArrayElements(sourcePixels, srcPtr, JNI_ABORT);
     env->ReleaseByteArrayElements(drivingPixels, drvPtr, JNI_ABORT);
     env->ReleaseByteArrayElements(outputPixels, outPtr, 0);
