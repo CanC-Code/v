@@ -1,17 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="16dp">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <ImageView android:id="@+id/imgSource" android:layout_width="150dp" android:layout_height="150dp" android:background="#DDD" android:layout_gravity="center" android:layout_marginBottom="8dp"/>
-    <Button android:id="@+id/btnPickSource" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Select Source Image" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
 
-    <ImageView android:id="@+id/imgDriving" android:layout_width="150dp" android:layout_height="150dp" android:background="#DDD" android:layout_gravity="center" android:layout_marginTop="16dp" android:layout_marginBottom="8dp"/>
-    <Button android:id="@+id/btnPickDriving" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Select Driving Video" />
-
-    <Button android:id="@+id/btnProcess" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Process" android:layout_marginTop="16dp" android:enabled="false"/>
-
-    <ImageView android:id="@+id/imgOutput" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:layout_marginTop="16dp" android:scaleType="fitCenter"/>
-</LinearLayout>
+    <application
+        android:allowBackup="true"
+        android:label="MotionForge"
+        android:icon="@android:mipmap/sym_def_app_icon"
+        android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+        
+        <activity 
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
