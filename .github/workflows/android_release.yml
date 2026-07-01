@@ -28,4 +28,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: motionforge-release
-          path: app/build/outputs/apk/release/app-release.apk
+          # Updated to use a wildcard to capture the APK whether it is signed or unsigned
+          path: app/build/outputs/apk/release/*.apk
