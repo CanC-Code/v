@@ -13,10 +13,13 @@
 // Constructor
 FommEngine::FommEngine()
     : env(std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "FommEngine")),
-      allocator(Ort::AllocatorWithDefaultOptions()) {}
+      allocator(Ort::AllocatorWithDefaultOptions()) {
+    LOGD("FommEngine constructed");
+}
 
 // Destructor
 FommEngine::~FommEngine() {
+    LOGD("FommEngine destructor");
     if (kpSession) kpSession->release();
     if (genSession) genSession->release();
 }
@@ -53,6 +56,7 @@ bool FommEngine::initialize(const std::string& kpModelPath, const std::string& g
         kpSession = std::make_unique<Ort::Session>(*env, kpModelPath.c_str(), sessionOptions);
         genSession = std::make_unique<Ort::Session>(*env, genModelPath.c_str(), sessionOptions);
 
+        LOGD("ONNX sessions initialized successfully");
         return true;
     } catch (const std::exception& e) {
         LOGE("Failed to initialize ONNX sessions: %s", e.what());
@@ -60,16 +64,61 @@ bool FommEngine::initialize(const std::string& kpModelPath, const std::string& g
     }
 }
 
-// Convert bitmap pixels to tensor
+// Convert bitmap pixels to tensor (RGBA to RGB + normalize)
 std::vector<float> FommEngine::bitmapToTensor(void* pixels, int width, int height) {
-    // Placeholder: Implement your actual conversion logic here
-    std::vector<float> tensor(TARGET_SIZE * TARGET_SIZE * CHANNELS, 0.0f);
+    std::vector<float> tensor(BATCH_SIZE * CHANNELS * TARGET_SIZE * TARGET_SIZE, 0.0f);
+    if (!pixels) {
+        LOGE("bitmapToTensor: pixels is null");
+        return tensor;
+    }
+
+    // Assuming pixels are in RGBA format (4 bytes per pixel)
+    uint32_t* rgbaPixels = static_cast<uint32_t*>(pixels);
+    for (int y = 0; y < std::min(height, TARGET_SIZE); ++y) {
+        for (int x = 0; x < std::min(width, TARGET_SIZE); ++x) {
+            int srcIdx = y * width + x;
+            int dstIdx = (y * TARGET_SIZE + x) * CHANNELS;
+
+            // Extract RGBA components
+            uint32_t pixel = rgbaPixels[srcIdx];
+            float r = static_cast<float>((pixel >> 16) & 0xFF) / 255.0f;
+            float g = static_cast<float>((pixel >> 8) & 0xFF) / 255.0f;
+            float b = static_cast<float>(pixel & 0xFF) / 255.0f;
+
+            // Normalize to [0, 1] and store in tensor (RGB order)
+            tensor[dstIdx] = r;
+            tensor[dstIdx + 1] = g;
+            tensor[dstIdx + 2] = b;
+        }
+    }
     return tensor;
 }
 
-// Convert tensor to bitmap pixels
+// Convert tensor to bitmap pixels (RGB to RGBA)
 void FommEngine::tensorToBitmap(const float* tensorData, void* outPixels, int width, int height) {
-    // Placeholder: Implement your actual conversion logic here
+    if (!outPixels || !tensorData) {
+        LOGE("tensorToBitmap: outPixels or tensorData is null");
+        return;
+    }
+
+    uint32_t* rgbaPixels = static_cast<uint32_t*>(outPixels);
+    for (int y = 0; y < std::min(height, TARGET_SIZE); ++y) {
+        for (int x = 0; x < std::min(width, TARGET_SIZE); ++x) {
+            int srcIdx = (y * TARGET_SIZE + x) * CHANNELS;
+            int dstIdx = y * width + x;
+
+            // Clamp tensor values to [0, 1] and convert to RGBA
+            float r = std::max(0.0f, std::min(1.0f, tensorData[srcIdx]));
+            float g = std::max(0.0f, std::min(1.0f, tensorData[srcIdx + 1]));
+            float b = std::max(0.0f, std::min(1.0f, tensorData[srcIdx + 2]));
+
+            // Convert to 8-bit and pack into RGBA
+            uint8_t r8 = static_cast<uint8_t>(r * 255.0f);
+            uint8_t g8 = static_cast<uint8_t>(g * 255.0f);
+            uint8_t b8 = static_cast<uint8_t>(b * 255.0f);
+            rgbaPixels[dstIdx] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+        }
+    }
 }
 
 // Extract keypoints from input tensor
@@ -79,6 +128,11 @@ FommEngine::Keypoints FommEngine::extractKeypoints(const std::vector<float>& inp
         // Dynamically discover input/output names for kpSession
         auto kpInputNames = getInputOutputNames(*kpSession, true);
         auto kpOutputNames = getInputOutputNames(*kpSession, false);
+
+        if (kpInputNames.empty() || kpOutputNames.empty()) {
+            LOGE("No input/output names found for kpSession");
+            return keypoints;
+        }
 
         // Convert to const char* const*
         auto kpInputNamesPtr = stringVecToCharPtrVec(kpInputNames);
@@ -91,10 +145,10 @@ FommEngine::Keypoints FommEngine::extractKeypoints(const std::vector<float>& inp
             memoryInfo, const_cast<float*>(inputTensor.data()), inputTensor.size(), inputShape.data(), inputShape.size());
 
         // Prepare output tensors
-        std::vector<float> kpOutput(TARGET_SIZE * TARGET_SIZE * 2); // Example size, adjust as needed
-        std::vector<float> jacOutput(TARGET_SIZE * TARGET_SIZE * 2); // Example size, adjust as needed
-        std::vector<int64_t> kpShape = {BATCH_SIZE, TARGET_SIZE, TARGET_SIZE, 2}; // Example shape
-        std::vector<int64_t> jacShape = {BATCH_SIZE, TARGET_SIZE, TARGET_SIZE, 2}; // Example shape
+        std::vector<float> kpOutput(BATCH_SIZE * TARGET_SIZE * TARGET_SIZE * 2); // Example: 2D keypoints
+        std::vector<float> jacOutput(BATCH_SIZE * TARGET_SIZE * TARGET_SIZE * 2); // Example: Jacobians
+        std::vector<int64_t> kpShape = {BATCH_SIZE, TARGET_SIZE, TARGET_SIZE, 2};
+        std::vector<int64_t> jacShape = {BATCH_SIZE, TARGET_SIZE, TARGET_SIZE, 2};
 
         Ort::Value kpOutputTensor = Ort::Value::CreateTensor<float>(
             memoryInfo, kpOutput.data(), kpOutput.size(), kpShape.data(), kpShape.size());
@@ -126,6 +180,8 @@ FommEngine::Keypoints FommEngine::extractKeypoints(const std::vector<float>& inp
 // Core pipeline: process a frame
 bool FommEngine::processFrame(void* sourcePixels, void* drivingPixels, void* outputPixels, int width, int height) {
     try {
+        LOGD("Processing frame: width=%d, height=%d", width, height);
+
         // Convert bitmaps to tensors
         std::vector<float> sourceTensor = bitmapToTensor(sourcePixels, width, height);
         std::vector<float> drivingTensor = bitmapToTensor(drivingPixels, width, height);
@@ -138,6 +194,11 @@ bool FommEngine::processFrame(void* sourcePixels, void* drivingPixels, void* out
         auto genInputNames = getInputOutputNames(*genSession, true);
         auto genOutputNames = getInputOutputNames(*genSession, false);
 
+        if (genInputNames.empty() || genOutputNames.empty()) {
+            LOGE("No input/output names found for genSession");
+            return false;
+        }
+
         // Convert to const char* const*
         auto genInputNamesPtr = stringVecToCharPtrVec(genInputNames);
         auto genOutputNamesPtr = stringVecToCharPtrVec(genOutputNames);
@@ -145,11 +206,13 @@ bool FommEngine::processFrame(void* sourcePixels, void* drivingPixels, void* out
         // Prepare input tensors for genSession
         std::vector<int64_t> inputShape = {BATCH_SIZE, CHANNELS, TARGET_SIZE, TARGET_SIZE};
         Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+
+        // Use source tensor as input (or combine with driving tensor as needed)
         Ort::Value inputTensorValue = Ort::Value::CreateTensor<float>(
             memoryInfo, const_cast<float*>(sourceTensor.data()), sourceTensor.size(), inputShape.data(), inputShape.size());
 
         // Prepare output tensor for genSession
-        std::vector<float> outputTensor(TARGET_SIZE * TARGET_SIZE * CHANNELS);
+        std::vector<float> outputTensor(BATCH_SIZE * CHANNELS * TARGET_SIZE * TARGET_SIZE);
         std::vector<int64_t> outputShape = {BATCH_SIZE, CHANNELS, TARGET_SIZE, TARGET_SIZE};
         Ort::Value outputTensorValue = Ort::Value::CreateTensor<float>(
             memoryInfo, outputTensor.data(), outputTensor.size(), outputShape.data(), outputShape.size());
@@ -163,6 +226,7 @@ bool FommEngine::processFrame(void* sourcePixels, void* drivingPixels, void* out
 
         // Convert output tensor to bitmap
         tensorToBitmap(outputTensor.data(), outputPixels, width, height);
+        LOGD("Frame processed successfully");
         return true;
     } catch (const std::exception& e) {
         LOGE("Exception in processFrame: %s", e.what());
