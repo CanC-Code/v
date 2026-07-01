@@ -77,9 +77,8 @@ android {
 }
 
 tasks.register('extractOnnxNative', Copy) {
-    from {
-        configurations.onnxExtraction.collect { zipTree(it) }
-    }
+    // FIX: Using provider to defer resolution of the configuration until execution time
+    from(provider { configurations.onnxExtraction.collect { zipTree(it) } })
     into "${layout.buildDirectory.get().asFile}/onnx_native"
     include "headers/**"
     include "jni/**"
