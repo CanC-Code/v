@@ -19,9 +19,10 @@ bool FommEngine::initialize(const std::string& kpModelPath, const std::string& g
         sessionOptions.SetIntraOpNumThreads(4);
         sessionOptions.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
-        // ONNX Runtime Android supports NNAPI for hardware acceleration
-        uint32_t nnapi_flags = 0; 
-        Ort::ThrowOnError(OrtSessionOptionsAppendExecutionProvider_Nnapi(sessionOptions, nnapi_flags));
+        // Removed explicit NNAPI call. The onnxruntime-android AAR defaults to 
+        // XNNPACK (highly optimized CPU execution) automatically. 
+        // The NNAPI provider requires <nnapi_provider_factory.h> which is 
+        // not exposed in the root include directory of the Maven AAR.
 
         kpSession = std::make_unique<Ort::Session>(*env, kpModelPath.c_str(), sessionOptions);
         genSession = std::make_unique<Ort::Session>(*env, genModelPath.c_str(), sessionOptions);
@@ -73,7 +74,7 @@ FommEngine::Keypoints FommEngine::extractKeypoints(const std::vector<float>& inp
         memoryInfo, const_cast<float*>(inputTensor.data()), inputTensor.size(), inputShape.data(), inputShape.size());
 
     const char* inputNames[] = {"image"};
-    const char* outputNames[] = {"kp", "jac"}; // Assuming strict names based on the WASM metadata checks
+    const char* outputNames[] = {"kp", "jac"};
 
     auto outputTensors = kpSession->Run(Ort::RunOptions{nullptr}, inputNames, &inputOrtTensor, 1, outputNames, 2);
 
@@ -105,7 +106,7 @@ bool FommEngine::processFrame(void* sourcePixels, void* drivingPixels, void* out
         std::vector<float> sourceTensor = bitmapToTensor(sourcePixels, width, height);
         std::vector<float> drivingTensor = bitmapToTensor(drivingPixels, width, height);
 
-        // 2. Extract Keypoints (Equivalent to detectKeypoints in JS)
+        // 2. Extract Keypoints
         Keypoints sourceKps = extractKeypoints(sourceTensor);
         Keypoints drivingKps = extractKeypoints(drivingTensor);
 
@@ -119,7 +120,6 @@ bool FommEngine::processFrame(void* sourcePixels, void* drivingPixels, void* out
         Ort::Value drvKpVal = Ort::Value::CreateTensor<float>(memoryInfo, drivingKps.kp.data(), drivingKps.kp.size(), drivingKps.kp_shape.data(), drivingKps.kp_shape.size());
         Ort::Value drvJacVal = Ort::Value::CreateTensor<float>(memoryInfo, drivingKps.jac.data(), drivingKps.jac.size(), drivingKps.jac_shape.data(), drivingKps.jac_shape.size());
 
-        // Mapping to the specific tensor names used in your JS configuration
         std::vector<const char*> inputNames = {"source_image", "source_keypoints", "source_jacobian", "driving_keypoints", "driving_jacobian"};
         std::vector<Ort::Value> inputTensors;
         inputTensors.push_back(std::move(srcImageVal));
@@ -128,9 +128,9 @@ bool FommEngine::processFrame(void* sourcePixels, void* drivingPixels, void* out
         inputTensors.push_back(std::move(drvKpVal));
         inputTensors.push_back(std::move(drvJacVal));
 
-        const char* outputNames[] = {"output_image"}; // Must match the generator's actual output node
+        const char* outputNames[] = {"output_image"}; 
 
-        // 4. Run Generation (Equivalent to runFrame in JS)
+        // 4. Run Generation
         auto outputTensors = genSession->Run(Ort::RunOptions{nullptr}, inputNames.data(), inputTensors.data(), inputTensors.size(), outputNames, 1);
 
         // 5. Retrieve output and convert back to Bitmap
