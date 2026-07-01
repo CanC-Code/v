@@ -10,15 +10,30 @@
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
+// Minimal FommEngine class definition
+class FommEngine {
+public:
+    static bool processFrame(
+        Ort::Session* kpSession,
+        Ort::Session* genSession,
+        const std::vector<float>& inputData,
+        const std::vector<int64_t>& inputShape,
+        std::vector<float>& outputData,
+        const std::vector<int64_t>& outputShape
+    );
+};
+
 // Helper function to get input/output names from ONNX model
 std::vector<std::string> getInputOutputNames(Ort::Session& session, bool isInput) {
     std::vector<std::string> names;
-    Ort::AllocatorWithDefaultOptions allocator;
     size_t numNodes = isInput ? session.GetInputCount() : session.GetOutputCount();
     for (size_t i = 0; i < numNodes; ++i) {
-        char* name = isInput ?
-            session.GetInputName(i, allocator) :
-            session.GetOutputName(i, allocator);
+        char* name;
+        if (isInput) {
+            session.GetInputNameAllocated(i, Ort::AllocatorWithDefaultOptions(), &name);
+        } else {
+            session.GetOutputNameAllocated(i, Ort::AllocatorWithDefaultOptions(), &name);
+        }
         names.emplace_back(name);
     }
     return names;
