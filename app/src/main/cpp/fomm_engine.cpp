@@ -7,6 +7,16 @@
 
 FommEngine* gFommEngine = nullptr;
 
+// Definition of the JNI string helper declared in fomm_engine.h
+std::string jstringToString(JNIEnv* env, jstring jstr) {
+    if (!jstr) return "";
+    const char* chars = env->GetStringUTFChars(jstr, nullptr);
+    if (!chars) return "";
+    std::string str(chars);
+    env->ReleaseStringUTFChars(jstr, chars);
+    return str;
+}
+
 FommEngine::FommEngine() 
     : env(std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_VERBOSE, "FommEngine")),
       allocator(Ort::AllocatorWithDefaultOptions()) {}
