@@ -1,8 +1,14 @@
+// fomm_engine.cpp
 #include <onnxruntime_cxx_api.h>
 #include <vector>
 #include <string>
 #include <stdexcept>
 #include <algorithm>
+#include <android/log.h>
+
+#define LOG_TAG "FommEngine"
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 // Helper function to get input/output names from ONNX model
 std::vector<std::string> getInputOutputNames(Ort::Session& session, bool isInput) {
@@ -18,40 +24,50 @@ std::vector<std::string> getInputOutputNames(Ort::Session& session, bool isInput
     return names;
 }
 
-// Updated processFrame function
-bool FommEngine::processFrame(...) {
+bool FommEngine::processFrame(
+    Ort::Session* kpSession,
+    Ort::Session* genSession,
+    const std::vector<float>& inputData,
+    const std::vector<int64_t>& inputShape,
+    std::vector<float>& outputData,
+    const std::vector<int64_t>& outputShape
+) {
     try {
-        // Dynamically discover input/output names
-        auto inputNames = getInputOutputNames(*kpSession, true);
-        auto outputNames = getInputOutputNames(*kpSession, false);
+        // Dynamically discover input/output names for kpSession
+        auto kpInputNames = getInputOutputNames(*kpSession, true);
+        auto kpOutputNames = getInputOutputNames(*kpSession, false);
 
-        // Use discovered names for input/output tensors
+        // Dynamically discover input/output names for genSession
+        auto genInputNames = getInputOutputNames(*genSession, true);
+        auto genOutputNames = getInputOutputNames(*genSession, false);
+
+        // Create input tensor
         Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(
             OrtArenaAllocator, OrtMemTypeDefault);
         Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
-            memoryInfo, inputData.data(), inputData.size(), inputShape.data(), inputShape.size());
-        Ort::Value outputTensor = Ort::Value::CreateTensor<float>(
-            memoryInfo, outputData.data(), outputData.size(), outputShape.data(), outputShape.size());
+            memoryInfo, const_cast<float*>(inputData.data()), inputData.size(), inputShape.data(), inputShape.size());
 
-        // Run session with discovered names
+        // Run kpSession
+        Ort::Value kpOutputTensor = Ort::Value::CreateTensor<float>(
+            memoryInfo, outputData.data(), outputData.size(), outputShape.data(), outputShape.size());
         kpSession->Run(
             Ort::RunOptions{nullptr},
-            inputNames.data(), &inputTensor, 1,
-            outputNames.data(), &outputTensor, 1
+            kpInputNames.data(), &inputTensor, 1,
+            kpOutputNames.data(), &kpOutputTensor, 1
         );
 
-        // Repeat for genSession if needed
-        auto genInputNames = getInputOutputNames(*genSession, true);
-        auto genOutputNames = getInputOutputNames(*genSession, false);
+        // Run genSession
+        Ort::Value genOutputTensor = Ort::Value::CreateTensor<float>(
+            memoryInfo, outputData.data(), outputData.size(), outputShape.data(), outputShape.size());
         genSession->Run(
             Ort::RunOptions{nullptr},
             genInputNames.data(), &inputTensor, 1,
-            genOutputNames.data(), &outputTensor, 1
+            genOutputNames.data(), &genOutputTensor, 1
         );
 
         return true;
     } catch (const std::exception& e) {
-        // Log error (recommended: add logging here)
+        LOGE("Exception in processFrame: %s", e.what());
         return false;
     }
 }
