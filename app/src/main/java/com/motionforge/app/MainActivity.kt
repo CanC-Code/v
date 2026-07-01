@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.util.Log
 import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
+// Import these for Coroutines and Lifecycle
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -24,12 +25,13 @@ class MainActivity : AppCompatActivity() {
 
         motionEngine = FommEngineWrapper()
 
+        // Launched within the Activity's lifecycleScope
         lifecycleScope.launch(Dispatchers.Default) {
             val models = copyAssetsToFilesDir()
             if (models != null && motionEngine.initialize(models.first, models.second)) {
                 processTestFrame()
             } else {
-                Log.e("MainActivity", "Engine failed to initialize or models missing.")
+                Log.e("MainActivity", "Engine failed to initialize.")
             }
         }
     }
@@ -38,27 +40,24 @@ class MainActivity : AppCompatActivity() {
         val detectorName = "FOMMDetector.onnx"
         val generatorName = "FOMMGenerator.onnx"
         
-        try {
+        return try {
             val detectorFile = File(filesDir, detectorName)
             val generatorFile = File(filesDir, generatorName)
             
-            // Extracting assets
             if (!detectorFile.exists()) assets.open(detectorName).use { it.copyTo(FileOutputStream(detectorFile)) }
             if (!generatorFile.exists()) assets.open(generatorName).use { it.copyTo(FileOutputStream(generatorFile)) }
             
-            return Pair(detectorFile.absolutePath, generatorFile.absolutePath)
+            Pair(detectorFile.absolutePath, generatorFile.absolutePath)
         } catch (e: Exception) {
-            Log.e("MainActivity", "Asset extraction failed: ${e.message}")
-            return null
+            null
         }
     }
 
-    private suspend fun processTestFrame() = withContext(Dispatchers.Default) {
+    private suspend fun processTestFrame() {
         val width = 256
         val height = 256
         val outBytes = ByteArray(width * height * 4)
         
-        // Passing dummy buffers for testing
         val success = motionEngine.processFrame(ByteArray(width * height * 4), ByteArray(width * height * 4), outBytes, width, height)
         
         if (success) {
