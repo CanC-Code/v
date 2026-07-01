@@ -24,7 +24,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.rememberAsyncImagePainter
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -57,8 +56,8 @@ fun MotionForgeApp() {
     var drivingVideoUri by remember { mutableStateOf<Uri?>(null) }
     var resultVideoUri by remember { mutableStateOf<Uri?>(null) }
     var isGenerating by remember { mutableStateOf(false) }
+    var statusMessage by remember { mutableStateOf("") }
 
-    // Launchers for picking media
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) sourceImageUri = uri
     }
@@ -66,7 +65,6 @@ fun MotionForgeApp() {
         if (uri != null) drivingVideoUri = uri
     }
 
-    // Launcher for saving the generated file securely using SAF
     val saveDocumentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("video/mp4")) { destUri ->
         if (destUri != null && resultVideoUri != null) {
             coroutineScope.launch(Dispatchers.IO) {
@@ -103,12 +101,10 @@ fun MotionForgeApp() {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Input Selection Row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Source Image Column
                 Column(
                     modifier = Modifier.weight(1f),
                     horizontalAlignment = Alignment.CenterHorizontally
@@ -126,28 +122,17 @@ fun MotionForgeApp() {
                                 modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Crop
                             )
-                        } ?: Text(
-                            "No Image",
-                            modifier = Modifier.align(Alignment.Center),
-                            color = Color.DarkGray
-                        )
+                        } ?: Text("No Image", modifier = Modifier.align(Alignment.Center), color = Color.DarkGray)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(
-                        onClick = {
-                            imagePicker.launch(
-                                androidx.activity.result.PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.ImageOnly
-                                )
-                            )
-                        },
+                        onClick = { imagePicker.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("Select Image")
                     }
                 }
 
-                // Driving Video Column
                 Column(
                     modifier = Modifier.weight(1f),
                     horizontalAlignment = Alignment.CenterHorizontally
@@ -158,23 +143,12 @@ fun MotionForgeApp() {
                             .aspectRatio(1f)
                             .background(Color.LightGray)
                     ) {
-                        drivingVideoUri?.let { uri ->
-                            VideoPreview(uri)
-                        } ?: Text(
-                            "No Video",
-                            modifier = Modifier.align(Alignment.Center),
-                            color = Color.DarkGray
-                        )
+                        drivingVideoUri?.let { uri -> VideoPreview(uri) }
+                            ?: Text("No Video", modifier = Modifier.align(Alignment.Center), color = Color.DarkGray)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(
-                        onClick = {
-                            videoPicker.launch(
-                                androidx.activity.result.PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.VideoOnly
-                                )
-                            )
-                        },
+                        onClick = { videoPicker.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("Select Video")
@@ -184,14 +158,20 @@ fun MotionForgeApp() {
 
             Divider(modifier = Modifier.padding(vertical = 8.dp))
 
-            // Generation Section
             Button(
                 onClick = {
                     if (sourceImageUri != null && drivingVideoUri != null) {
                         isGenerating = true
+                        statusMessage = "Processing Native Motion Transference..."
                         resultVideoUri = null
                         coroutineScope.launch {
-                            resultVideoUri = generateAnimation(context, sourceImageUri!!, drivingVideoUri!!)
+                            val result = executeMotionPipeline(context, sourceImageUri!!, drivingVideoUri!!)
+                            if (result != null) {
+                                resultVideoUri = result
+                                statusMessage = "Generation Successful!"
+                            } else {
+                                statusMessage = "Pipeline Inference Failed."
+                            }
                             isGenerating = false
                         }
                     }
@@ -199,17 +179,19 @@ fun MotionForgeApp() {
                 enabled = sourceImageUri != null && drivingVideoUri != null && !isGenerating,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(if (isGenerating) "Processing Output..." else "Generate Animation")
+                Text(if (isGenerating) "Processing Pipeline..." else "Generate Animation")
+            }
+
+            if (statusMessage.isNotEmpty()) {
+                Text(text = statusMessage, style = MaterialTheme.typography.bodyMedium)
             }
 
             if (isGenerating) {
                 CircularProgressIndicator()
             }
 
-            // Output Review & Save Section
             if (resultVideoUri != null) {
                 Text("Result Preview:", style = MaterialTheme.typography.titleMedium)
-                
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(0.8f)
@@ -218,12 +200,8 @@ fun MotionForgeApp() {
                 ) {
                     VideoPreview(resultVideoUri!!)
                 }
-
                 Button(
-                    onClick = {
-                        // Triggers the system UI to select a designated save location
-                        saveDocumentLauncher.launch("MotionForge_Export_${System.currentTimeMillis()}.mp4")
-                    },
+                    onClick = { saveDocumentLauncher.launch("MotionForge_Export_${System.currentTimeMillis()}.mp4") },
                     modifier = Modifier.fillMaxWidth(0.8f)
                 ) {
                     Text("Save Locally")
@@ -241,7 +219,6 @@ fun VideoPreview(uri: Uri) {
                 setVideoURI(uri)
                 setOnPreparedListener { mp ->
                     mp.isLooping = true
-                    // Mute for preview purposes
                     mp.setVolume(0f, 0f)
                     start()
                 }
@@ -251,22 +228,41 @@ fun VideoPreview(uri: Uri) {
     )
 }
 
-/**
- * Placeholder processing pipeline.
- * Re-route your JNI ONNX integration here. For functional testing of the UI and save pipeline, 
- * this mimics the generation process by duplicating the input video to cache.
- */
-suspend fun generateAnimation(context: Context, imageUri: Uri, videoUri: Uri): Uri = withContext(Dispatchers.IO) {
-    // Simulate generation delay
-    delay(2500)
-    
-    val tempFile = File(context.cacheDir, "temp_gen_${System.currentTimeMillis()}.mp4")
-    
-    context.contentResolver.openInputStream(videoUri)?.use { input ->
-        FileOutputStream(tempFile).use { output ->
-            input.copyTo(output)
+private suspend fun executeMotionPipeline(context: Context, imgUri: Uri, vidUri: Uri): Uri? = withContext(Dispatchers.IO) {
+    try {
+        // 1. Resolve runtime absolute paths for model assets generated by fetch_models.sh
+        val kpModelPath = MotionForgeEngine.getAssetPath(context, "fomm_keypoint_detector.onnx")
+        val genModelPath = MotionForgeEngine.getAssetPath(context, "fomm_generator.onnx")
+
+        // 2. Cache incoming streams into absolute file paths accessible to the C++ sandbox
+        val sourceFile = File(context.cacheDir, "input_source.jpg")
+        context.contentResolver.openInputStream(imgUri)?.use { input ->
+            FileOutputStream(sourceFile).use { input.copyTo(it) }
         }
+
+        val drivingFile = File(context.cacheDir, "input_driving.mp4")
+        context.contentResolver.openInputStream(vidUri)?.use { input ->
+            FileOutputStream(drivingFile).use { input.copyTo(it) }
+        }
+
+        val outputFile = File(context.cacheDir, "output_generation.mp4")
+
+        // 3. Dispatch execution payload down to the C++ ONNX engine layer
+        val success = MotionForgeEngine.runMotionTransfer(
+            kpModelPath = kpModelPath,
+            genModelPath = genModelPath,
+            imagePath = sourceFile.absolutePath,
+            videoPath = drivingFile.absolutePath,
+            outputPath = outputFile.absolutePath
+        )
+
+        if (success && outputFile.exists()) {
+            Uri.fromFile(outputFile)
+        } else {
+            null
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
     }
-    
-    Uri.fromFile(tempFile)
 }
