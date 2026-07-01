@@ -1,4 +1,4 @@
-package com.example.motionforge
+package com.motionforge.app
 
 import android.content.Context
 import android.net.Uri
@@ -23,7 +23,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.rememberAsyncImagePainter
-import com.motionforge.app.FommEngineWrapper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -157,7 +156,8 @@ fun MotionForgeApp() {
                 }
             }
 
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            // FIX: Reverted to Divider to match the 2023.08.00 Compose BOM Material 3 API
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
 
             Button(
                 onClick = {
@@ -246,7 +246,6 @@ private suspend fun executeMotionPipeline(context: Context, imgUri: Uri, vidUri:
         android.util.Log.d("FommEngine", "Starting pipeline initialization...")
         val engine = FommEngineWrapper()
         
-        // Ensure these exact filenames exist in your app/src/main/assets/ directory
         val kpModelPath = getAssetPath(context, "FOMMDetector.onnx")
         val genModelPath = getAssetPath(context, "FOMMGenerator.onnx")
 
