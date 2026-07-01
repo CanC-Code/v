@@ -9,9 +9,11 @@ import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Bundle
-import android.os.Environment
+import android.view.View
 import android.widget.Button
 import android.widget.ImageView
+import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -27,25 +29,68 @@ class MainActivity : AppCompatActivity() {
     private lateinit var engine: MotionEngine
     private var sourceBitmap: Bitmap? = null
     private var drivingVideoUri: Uri? = null
+    private var tempOutputFile: File? = null
 
-    // Dedicated Image Picker ensures only images are sent to the decoder
+    // Image Picker
     private val pickSource = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let {
             val bmp = uriToBitmap(it)
             if (bmp != null) {
                 sourceBitmap = bmp
                 findViewById<ImageView>(R.id.imgSource).setImageBitmap(sourceBitmap)
+                checkReadyState()
             } else {
-                Toast.makeText(this, "Failed to decode image. Please select a valid photo.", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Failed to decode image.", Toast.LENGTH_LONG).show()
             }
         }
     }
 
-    // Dedicated Video Picker isolates the video URI
+    // Video Picker (with Thumbnail Extraction)
     private val pickDriving = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        uri?.let {
-            drivingVideoUri = it
-            Toast.makeText(this, "Video Selected Successfully", Toast.LENGTH_SHORT).show()
+        uri?.let { destUri ->
+            drivingVideoUri = destUri
+            CoroutineScope(Dispatchers.IO).launch {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(this@MainActivity, destUri)
+                    val frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    withContext(Dispatchers.Main) {
+                        if (frame != null) {
+                            findViewById<ImageView>(R.id.imgDriving).setImageBitmap(frame)
+                        }
+                        checkReadyState()
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                } finally {
+                    retriever.release()
+                }
+            }
+        }
+    }
+
+    // Manual Export System Picker
+    private val exportLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("video/mp4")) { uri ->
+        uri?.let { destUri ->
+            tempOutputFile?.let { tempFile ->
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        contentResolver.openOutputStream(destUri)?.use { output ->
+                            tempFile.inputStream().use { input ->
+                                input.copyTo(output)
+                            }
+                        }
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@MainActivity, "Video Exported Successfully", Toast.LENGTH_LONG).show()
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@MainActivity, "Export Failed: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -66,13 +111,31 @@ class MainActivity : AppCompatActivity() {
         
         findViewById<Button>(R.id.btnProcess).setOnClickListener {
             if (sourceBitmap != null && drivingVideoUri != null) {
-                Toast.makeText(this, "Processing Video... Please wait.", Toast.LENGTH_LONG).show()
-                findViewById<Button>(R.id.btnProcess).isEnabled = false
+                prepareForProcessing()
                 processVideo(drivingVideoUri!!)
-            } else {
-                Toast.makeText(this, "Please select both source image and driving video.", Toast.LENGTH_SHORT).show()
             }
         }
+
+        findViewById<Button>(R.id.btnExport).setOnClickListener {
+            exportLauncher.launch("MotionForge_Output_${System.currentTimeMillis()}.mp4")
+        }
+    }
+
+    private fun checkReadyState() {
+        if (sourceBitmap != null && drivingVideoUri != null) {
+            findViewById<TextView>(R.id.txtStatus).text = "Status: Ready to Process"
+        }
+    }
+
+    private fun prepareForProcessing() {
+        findViewById<Button>(R.id.btnProcess).isEnabled = false
+        findViewById<Button>(R.id.btnExport).isEnabled = false
+        findViewById<Button>(R.id.btnPickSource).isEnabled = false
+        findViewById<Button>(R.id.btnPickDriving).isEnabled = false
+        
+        findViewById<ProgressBar>(R.id.progressBar).visibility = View.VISIBLE
+        findViewById<ProgressBar>(R.id.progressBar).progress = 0
+        findViewById<TextView>(R.id.txtStatus).text = "Status: Initializing Encoder..."
     }
 
     private fun processVideo(uri: Uri) {
@@ -84,7 +147,9 @@ class MainActivity : AppCompatActivity() {
                 val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 val durationMs = durationStr?.toLong() ?: 0
                 
-                val outputFile = File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), "MotionForge_${System.currentTimeMillis()}.mp4")
+                // Write to isolated app cache directory instead of public external storage
+                tempOutputFile = File(cacheDir, "MotionForge_TempOutput.mp4")
+                if (tempOutputFile!!.exists()) { tempOutputFile!!.delete() }
                 
                 val width = 256
                 val height = 256
@@ -99,7 +164,7 @@ class MainActivity : AppCompatActivity() {
                 codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 codec.start()
 
-                val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                val muxer = MediaMuxer(tempOutputFile!!.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
                 var trackIndex = -1
                 var muxerStarted = false
 
@@ -124,8 +189,12 @@ class MainActivity : AppCompatActivity() {
                                 
                                 engine.processFrame(sourceBitmap!!, resizedFrame, outputBitmap)
                                 
+                                // GUI Update: Show live processing and progress calculations
+                                val progressPercent = ((timeUs.toFloat() / (durationMs * 1000f)) * 100).toInt().coerceIn(0, 100)
                                 withContext(Dispatchers.Main) {
                                     findViewById<ImageView>(R.id.imgOutput).setImageBitmap(outputBitmap)
+                                    findViewById<ProgressBar>(R.id.progressBar).progress = progressPercent
+                                    findViewById<TextView>(R.id.txtStatus).text = "Status: Processing Frame... $progressPercent%"
                                 }
 
                                 val inputBuffer = codec.getInputBuffer(inputBufferIndex)
@@ -179,13 +248,18 @@ class MainActivity : AppCompatActivity() {
 
                 withContext(Dispatchers.Main) {
                     findViewById<Button>(R.id.btnProcess).isEnabled = true
-                    Toast.makeText(this@MainActivity, "Saved to Movies: ${outputFile.name}", Toast.LENGTH_LONG).show()
+                    findViewById<Button>(R.id.btnPickSource).isEnabled = true
+                    findViewById<Button>(R.id.btnPickDriving).isEnabled = true
+                    findViewById<Button>(R.id.btnExport).isEnabled = true
+                    findViewById<TextView>(R.id.txtStatus).text = "Status: Processing Complete!"
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
                 withContext(Dispatchers.Main) {
                     findViewById<Button>(R.id.btnProcess).isEnabled = true
-                    Toast.makeText(this@MainActivity, "Error during processing: ${e.message}", Toast.LENGTH_LONG).show()
+                    findViewById<Button>(R.id.btnPickSource).isEnabled = true
+                    findViewById<Button>(R.id.btnPickDriving).isEnabled = true
+                    findViewById<TextView>(R.id.txtStatus).text = "Error: ${e.message}"
                 }
             } finally {
                 retriever.release()
@@ -255,15 +329,15 @@ class MainActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) {
                     if (isSuccess) {
                         findViewById<Button>(R.id.btnProcess).isEnabled = true
-                        Toast.makeText(this@MainActivity, "Engine Ready", Toast.LENGTH_SHORT).show()
+                        findViewById<TextView>(R.id.txtStatus).text = "Status: Engine Ready"
                     } else {
-                        Toast.makeText(this@MainActivity, "Failed to initialize native engine.", Toast.LENGTH_LONG).show()
+                        findViewById<TextView>(R.id.txtStatus).text = "Error: Engine Init Failed"
                     }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Error loading models: ${e.message}", Toast.LENGTH_LONG).show()
+                    findViewById<TextView>(R.id.txtStatus).text = "Error: Model Extraction Failed"
                 }
             }
         }
