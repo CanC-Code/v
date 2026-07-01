@@ -1,4 +1,4 @@
-package com.motionforge.app
+package com.example.motionforge
 
 import android.content.Context
 import android.net.Uri
@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.rememberAsyncImagePainter
+import com.motionforge.app.FommEngineWrapper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -156,7 +157,6 @@ fun MotionForgeApp() {
                 }
             }
 
-            // FIX: Reverted to Divider to match the 2023.08.00 Compose BOM Material 3 API
             Divider(modifier = Modifier.padding(vertical = 8.dp))
 
             Button(
