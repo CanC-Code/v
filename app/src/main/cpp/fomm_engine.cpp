@@ -1,85 +1,147 @@
 // fomm_engine.cpp
-#include <onnxruntime_cxx_api.h>
-#include <vector>
-#include <string>
+#include "fomm_engine.h"
+#include <android/log.h>
 #include <stdexcept>
 #include <algorithm>
-#include <android/log.h>
 
 #define LOG_TAG "FommEngine"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// Minimal FommEngine class definition
-class FommEngine {
-public:
-    static bool processFrame(
-        Ort::Session* kpSession,
-        Ort::Session* genSession,
-        const std::vector<float>& inputData,
-        const std::vector<int64_t>& inputShape,
-        std::vector<float>& outputData,
-        const std::vector<int64_t>& outputShape
-    );
-};
+// Constructor
+FommEngine::FommEngine()
+    : env(std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "FommEngine")),
+      allocator(Ort::AllocatorWithDefaultOptions()) {}
+
+// Destructor
+FommEngine::~FommEngine() {
+    if (kpSession) kpSession->release();
+    if (genSession) genSession->release();
+}
 
 // Helper function to get input/output names from ONNX model
-std::vector<std::string> getInputOutputNames(Ort::Session& session, bool isInput) {
+std::vector<std::string> FommEngine::getInputOutputNames(Ort::Session& session, bool isInput) {
     std::vector<std::string> names;
     size_t numNodes = isInput ? session.GetInputCount() : session.GetOutputCount();
     for (size_t i = 0; i < numNodes; ++i) {
         char* name;
         if (isInput) {
-            session.GetInputNameAllocated(i, Ort::AllocatorWithDefaultOptions(), &name);
+            session.GetInputNameAllocated(i, allocator, &name);
         } else {
-            session.GetOutputNameAllocated(i, Ort::AllocatorWithDefaultOptions(), &name);
+            session.GetOutputNameAllocated(i, allocator, &name);
         }
         names.emplace_back(name);
     }
     return names;
 }
 
-bool FommEngine::processFrame(
-    Ort::Session* kpSession,
-    Ort::Session* genSession,
-    const std::vector<float>& inputData,
-    const std::vector<int64_t>& inputShape,
-    std::vector<float>& outputData,
-    const std::vector<int64_t>& outputShape
-) {
+// Initialize ONNX sessions
+bool FommEngine::initialize(const std::string& kpModelPath, const std::string& genModelPath) {
+    try {
+        Ort::SessionOptions sessionOptions;
+        sessionOptions.SetIntraOpNumThreads(1);
+        sessionOptions.SetInterOpNumThreads(1);
+
+        kpSession = std::make_unique<Ort::Session>(*env, kpModelPath.c_str(), sessionOptions);
+        genSession = std::make_unique<Ort::Session>(*env, genModelPath.c_str(), sessionOptions);
+
+        return true;
+    } catch (const std::exception& e) {
+        LOGE("Failed to initialize ONNX sessions: %s", e.what());
+        return false;
+    }
+}
+
+// Convert bitmap pixels to tensor
+std::vector<float> FommEngine::bitmapToTensor(void* pixels, int width, int height) {
+    // Placeholder: Implement your actual conversion logic here
+    std::vector<float> tensor(TARGET_SIZE * TARGET_SIZE * CHANNELS, 0.0f);
+    return tensor;
+}
+
+// Convert tensor to bitmap pixels
+void FommEngine::tensorToBitmap(const float* tensorData, void* outPixels, int width, int height) {
+    // Placeholder: Implement your actual conversion logic here
+}
+
+// Extract keypoints from input tensor
+FommEngine::Keypoints FommEngine::extractKeypoints(const std::vector<float>& inputTensor) {
+    Keypoints keypoints;
     try {
         // Dynamically discover input/output names for kpSession
         auto kpInputNames = getInputOutputNames(*kpSession, true);
         auto kpOutputNames = getInputOutputNames(*kpSession, false);
 
+        // Create input tensor
+        std::vector<int64_t> inputShape = {BATCH_SIZE, CHANNELS, TARGET_SIZE, TARGET_SIZE};
+        Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+        Ort::Value inputTensorValue = Ort::Value::CreateTensor<float>(
+            memoryInfo, const_cast<float*>(inputTensor.data()), inputTensor.size(), inputShape.data(), inputShape.size());
+
+        // Prepare output tensors
+        std::vector<float> kpOutput(TARGET_SIZE * TARGET_SIZE * 2); // Example size, adjust as needed
+        std::vector<float> jacOutput(TARGET_SIZE * TARGET_SIZE * 2); // Example size, adjust as needed
+        std::vector<int64_t> kpShape = {BATCH_SIZE, TARGET_SIZE, TARGET_SIZE, 2}; // Example shape
+        std::vector<int64_t> jacShape = {BATCH_SIZE, TARGET_SIZE, TARGET_SIZE, 2}; // Example shape
+
+        Ort::Value kpOutputTensor = Ort::Value::CreateTensor<float>(
+            memoryInfo, kpOutput.data(), kpOutput.size(), kpShape.data(), kpShape.size());
+        Ort::Value jacOutputTensor = Ort::Value::CreateTensor<float>(
+            memoryInfo, jacOutput.data(), jacOutput.size(), jacShape.data(), jacShape.size());
+
+        // Run kpSession
+        kpSession->Run(
+            Ort::RunOptions{nullptr},
+            kpInputNames.data(), &inputTensorValue, 1,
+            kpOutputNames.data(), &kpOutputTensor, 1
+        );
+
+        keypoints.kp = kpOutput;
+        keypoints.jac = jacOutput;
+        keypoints.kp_shape = kpShape;
+        keypoints.jac_shape = jacShape;
+    } catch (const std::exception& e) {
+        LOGE("Exception in extractKeypoints: %s", e.what());
+    }
+    return keypoints;
+}
+
+// Core pipeline: process a frame
+bool FommEngine::processFrame(void* sourcePixels, void* drivingPixels, void* outputPixels, int width, int height) {
+    try {
+        // Convert bitmaps to tensors
+        std::vector<float> sourceTensor = bitmapToTensor(sourcePixels, width, height);
+        std::vector<float> drivingTensor = bitmapToTensor(drivingPixels, width, height);
+
+        // Extract keypoints for source and driving frames
+        Keypoints sourceKeypoints = extractKeypoints(sourceTensor);
+        Keypoints drivingKeypoints = extractKeypoints(drivingTensor);
+
         // Dynamically discover input/output names for genSession
         auto genInputNames = getInputOutputNames(*genSession, true);
         auto genOutputNames = getInputOutputNames(*genSession, false);
 
-        // Create input tensor
-        Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(
-            OrtArenaAllocator, OrtMemTypeDefault);
-        Ort::Value inputTensor = Ort::Value::CreateTensor<float>(
-            memoryInfo, const_cast<float*>(inputData.data()), inputData.size(), inputShape.data(), inputShape.size());
+        // Prepare input tensors for genSession
+        std::vector<int64_t> inputShape = {BATCH_SIZE, CHANNELS, TARGET_SIZE, TARGET_SIZE};
+        Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+        Ort::Value inputTensorValue = Ort::Value::CreateTensor<float>(
+            memoryInfo, const_cast<float*>(sourceTensor.data()), sourceTensor.size(), inputShape.data(), inputShape.size());
 
-        // Run kpSession
-        Ort::Value kpOutputTensor = Ort::Value::CreateTensor<float>(
-            memoryInfo, outputData.data(), outputData.size(), outputShape.data(), outputShape.size());
-        kpSession->Run(
-            Ort::RunOptions{nullptr},
-            kpInputNames.data(), &inputTensor, 1,
-            kpOutputNames.data(), &kpOutputTensor, 1
-        );
+        // Prepare output tensor for genSession
+        std::vector<float> outputTensor(TARGET_SIZE * TARGET_SIZE * CHANNELS);
+        std::vector<int64_t> outputShape = {BATCH_SIZE, CHANNELS, TARGET_SIZE, TARGET_SIZE};
+        Ort::Value outputTensorValue = Ort::Value::CreateTensor<float>(
+            memoryInfo, outputTensor.data(), outputTensor.size(), outputShape.data(), outputShape.size());
 
         // Run genSession
-        Ort::Value genOutputTensor = Ort::Value::CreateTensor<float>(
-            memoryInfo, outputData.data(), outputData.size(), outputShape.data(), outputShape.size());
         genSession->Run(
             Ort::RunOptions{nullptr},
-            genInputNames.data(), &inputTensor, 1,
-            genOutputNames.data(), &genOutputTensor, 1
+            genInputNames.data(), &inputTensorValue, 1,
+            genOutputNames.data(), &outputTensorValue, 1
         );
 
+        // Convert output tensor to bitmap
+        tensorToBitmap(outputTensor.data(), outputPixels, width, height);
         return true;
     } catch (const std::exception& e) {
         LOGE("Exception in processFrame: %s", e.what());
