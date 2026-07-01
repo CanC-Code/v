@@ -2,46 +2,22 @@
 package com.motionforge.app
 
 import android.graphics.Bitmap
-import android.media.MediaCodec
-import android.media.MediaCodecInfo
-import android.media.MediaFormat
 import android.os.Bundle
 import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
-import java.nio.ByteBuffer
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var encoder: MediaCodec
-    private var isEncoderStarted = false
-    private var fommEngine: FommEngine? = null
-
-    // Load native library
-    init {
-        System.loadLibrary("motionforge_engine")
-    }
+    private lateinit var fommEngineWrapper: FommEngineWrapper
+    private lateinit var sourceBitmap: Bitmap
+    private lateinit var drivingBitmap: Bitmap
+    private lateinit var outputBitmap: Bitmap
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setupEncoder()
+        fommEngineWrapper = FommEngineWrapper()
         initializeFommEngine()
-    }
-
-    private fun setupEncoder() {
-        try {
-            val mimeType = MediaFormat.MIMETYPE_VIDEO_AVC
-            val format = MediaFormat.createVideoFormat(mimeType, 1280, 720)
-            format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            format.setInteger(MediaFormat.KEY_BIT_RATE, 1_000_000)
-            format.setInteger(MediaFormat.KEY_FRAME_RATE, 30)
-            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-
-            encoder = MediaCodec.createEncoderByType(mimeType)
-            encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            encoder.start()
-            isEncoderStarted = true
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Failed to setup encoder: ${e.message}")
-        }
+        loadTestBitmaps()
+        processTestFrame()
     }
 
     private fun initializeFommEngine() {
@@ -49,8 +25,7 @@ class MainActivity : AppCompatActivity() {
             // Replace with actual paths to your ONNX models
             val kpModelPath = "$filesDir/kp_model.onnx"
             val genModelPath = "$filesDir/gen_model.onnx"
-            fommEngine = FommEngine()
-            if (!fommEngine!!.initialize(kpModelPath, genModelPath)) {
+            if (!fommEngineWrapper.initialize(kpModelPath, genModelPath)) {
                 Log.e("MainActivity", "Failed to initialize FommEngine")
             }
         } catch (e: Exception) {
@@ -58,71 +33,73 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun processFrame(sourceBitmap: Bitmap, drivingBitmap: Bitmap): Bitmap? {
-        if (fommEngine == null) {
-            Log.e("MainActivity", "FommEngine not initialized")
-            return null
-        }
+    private fun loadTestBitmaps() {
+        // Load or create test bitmaps (replace with your actual bitmaps)
+        sourceBitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
+        drivingBitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
+        outputBitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
+    }
 
-        val width = sourceBitmap.width
-        val height = sourceBitmap.height
-        val outputBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-
+    private fun processTestFrame() {
         try {
-            val result = fommEngine!!.processFrame(
-                sourceBitmap.pixels, // Assuming pixels are accessible (simplified)
-                drivingBitmap.pixels,
-                outputBitmap.pixels,
-                width,
-                height
+            // Extract pixels from bitmaps
+            val sourcePixels = IntArray(256 * 256)
+            val drivingPixels = IntArray(256 * 256)
+            val outputPixels = IntArray(256 * 256)
+
+            sourceBitmap.getPixels(sourcePixels, 0, 256, 0, 0, 256, 256)
+            drivingBitmap.getPixels(drivingPixels, 0, 256, 0, 0, 256, 256)
+
+            // Convert IntArray to ByteArray (RGBA to bytes)
+            val sourceBytes = intArrayToByteArray(sourcePixels)
+            val drivingBytes = intArrayToByteArray(drivingPixels)
+            val outputBytes = ByteArray(256 * 256 * 4) // RGBA
+
+            // Process frame
+            val result = fommEngineWrapper.processFrame(
+                sourceBytes,
+                drivingBytes,
+                outputBytes,
+                256,
+                256
             )
-            if (!result) {
+
+            if (result) {
+                // Convert output bytes back to IntArray
+                val outputInts = byteArrayToIntArray(outputBytes)
+                outputBitmap.setPixels(outputInts, 0, 256, 0, 0, 256, 256)
+                Log.d("MainActivity", "Frame processed successfully")
+            } else {
                 Log.e("MainActivity", "Failed to process frame")
-                return null
             }
-            return outputBitmap
         } catch (e: Exception) {
-            Log.e("MainActivity", "Exception in processFrame: ${e.message}")
-            return null
+            Log.e("MainActivity", "Exception in processTestFrame: ${e.message}")
         }
     }
 
-    private fun drainEncoder() {
-        if (!isEncoderStarted) return
-
-        val bufferInfo = MediaCodec.BufferInfo()
-        while (true) {
-            val outputBufferIndex = encoder.dequeueOutputBuffer(bufferInfo, 0)
-            when (outputBufferIndex) {
-                MediaCodec.INFO_TRY_AGAIN_LATER -> {
-                    Thread.sleep(10)
-                    continue
-                }
-                MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    continue
-                }
-                else -> {
-                    if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                        Log.d("MainActivity", "EOS received, stopping encoder")
-                        break
-                    }
-                    if (outputBufferIndex >= 0) {
-                        encoder.releaseOutputBuffer(outputBufferIndex, false)
-                    }
-                }
-            }
+    // Helper: Convert IntArray (RGBA) to ByteArray
+    private fun intArrayToByteArray(ints: IntArray): ByteArray {
+        val bytes = ByteArray(ints.size * 4)
+        for (i in ints.indices) {
+            val pixel = ints[i]
+            bytes[i * 4] = (pixel shr 16 and 0xFF).toByte() // R
+            bytes[i * 4 + 1] = (pixel shr 8 and 0xFF).toByte() // G
+            bytes[i * 4 + 2] = (pixel and 0xFF).toByte() // B
+            bytes[i * 4 + 3] = (pixel shr 24 and 0xFF).toByte() // A
         }
+        return bytes
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        if (isEncoderStarted) {
-            encoder.stop()
-            encoder.release()
-            isEncoderStarted = false
+    // Helper: Convert ByteArray (RGBA) to IntArray
+    private fun byteArrayToIntArray(bytes: ByteArray): IntArray {
+        val ints = IntArray(bytes.size / 4)
+        for (i in ints.indices) {
+            val r = bytes[i * 4].toInt() and 0xFF
+            val g = bytes[i * 4 + 1].toInt() and 0xFF
+            val b = bytes[i * 4 + 2].toInt() and 0xFF
+            val a = bytes[i * 4 + 3].toInt() and 0xFF
+            ints[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
         }
-        fommEngine?.let {
-            // No explicit cleanup needed for FommEngine (handled in destructor)
-        }
+        return ints
     }
 }
