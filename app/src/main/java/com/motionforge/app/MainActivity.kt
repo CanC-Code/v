@@ -1,20 +1,29 @@
 // MainActivity.kt
 package com.motionforge.app
 
+import android.graphics.Bitmap
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.os.Bundle
 import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
+import java.nio.ByteBuffer
 
 class MainActivity : AppCompatActivity() {
     private lateinit var encoder: MediaCodec
     private var isEncoderStarted = false
+    private var fommEngine: FommEngine? = null
+
+    // Load native library
+    init {
+        System.loadLibrary("motionforge_engine")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setupEncoder()
+        initializeFommEngine()
     }
 
     private fun setupEncoder() {
@@ -35,6 +44,49 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun initializeFommEngine() {
+        try {
+            // Replace with actual paths to your ONNX models
+            val kpModelPath = "$filesDir/kp_model.onnx"
+            val genModelPath = "$filesDir/gen_model.onnx"
+            fommEngine = FommEngine()
+            if (!fommEngine!!.initialize(kpModelPath, genModelPath)) {
+                Log.e("MainActivity", "Failed to initialize FommEngine")
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Exception in initializeFommEngine: ${e.message}")
+        }
+    }
+
+    private fun processFrame(sourceBitmap: Bitmap, drivingBitmap: Bitmap): Bitmap? {
+        if (fommEngine == null) {
+            Log.e("MainActivity", "FommEngine not initialized")
+            return null
+        }
+
+        val width = sourceBitmap.width
+        val height = sourceBitmap.height
+        val outputBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+
+        try {
+            val result = fommEngine!!.processFrame(
+                sourceBitmap.pixels, // Assuming pixels are accessible (simplified)
+                drivingBitmap.pixels,
+                outputBitmap.pixels,
+                width,
+                height
+            )
+            if (!result) {
+                Log.e("MainActivity", "Failed to process frame")
+                return null
+            }
+            return outputBitmap
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Exception in processFrame: ${e.message}")
+            return null
+        }
+    }
+
     private fun drainEncoder() {
         if (!isEncoderStarted) return
 
@@ -43,12 +95,10 @@ class MainActivity : AppCompatActivity() {
             val outputBufferIndex = encoder.dequeueOutputBuffer(bufferInfo, 0)
             when (outputBufferIndex) {
                 MediaCodec.INFO_TRY_AGAIN_LATER -> {
-                    // Avoid busy-waiting
                     Thread.sleep(10)
                     continue
                 }
                 MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                    // Handle format changes if needed
                     continue
                 }
                 else -> {
@@ -57,7 +107,6 @@ class MainActivity : AppCompatActivity() {
                         break
                     }
                     if (outputBufferIndex >= 0) {
-                        // Process output buffer (e.g., write to file or send to decoder)
                         encoder.releaseOutputBuffer(outputBufferIndex, false)
                     }
                 }
@@ -71,6 +120,9 @@ class MainActivity : AppCompatActivity() {
             encoder.stop()
             encoder.release()
             isEncoderStarted = false
+        }
+        fommEngine?.let {
+            // No explicit cleanup needed for FommEngine (handled in destructor)
         }
     }
 }
