@@ -1,15 +1,15 @@
 package com.example.motionforge
 
-import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
-import android.provider.MediaStore
-import android.widget.Toast
+import android.widget.VideoView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -17,130 +17,79 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import coil.compose.rememberAsyncImagePainter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
 class MainActivity : ComponentActivity() {
-
-    // Load the native C++ library containing the ONNX runtime and FOMM logic
-    init {
-        try {
-            System.loadLibrary("motionforge")
-        } catch (e: UnsatisfiedLinkError) {
-            e.printStackTrace()
-        }
-    }
-
-    /**
-     * JNI Hook: Triggers the native First Order Motion Model generation.
-     * Ensure your native C++ file implements this exact signature.
-     */
-    private external fun generateMotionNative(
-        sourceImagePath: String,
-        drivingVideoPath: String,
-        outputVideoPath: String
-    ): Boolean
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
         setContent {
             MaterialTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    MotionForgeScreen(::processMotionRequest)
+                    MotionForgeApp()
                 }
             }
-        }
-    }
-
-    /**
-     * Executes the heavy ONNX processing on a background thread.
-     * This is critical to prevent OutOfMemory errors and UI thread blocking 
-     * on mobile device architectures during tensor operations.
-     */
-    private suspend fun processMotionRequest(
-        context: Context,
-        imageUri: Uri,
-        videoUri: Uri
-    ): Uri? = withContext(Dispatchers.IO) {
-        try {
-            // 1. Copy content:// URIs to local cache so C++ can read standard file paths
-            val imageFile = copyUriToCache(context, imageUri, "source_image.jpg")
-            val videoFile = copyUriToCache(context, videoUri, "driving_video.mp4")
-            val outputFile = File(context.cacheDir, "output_motion_${System.currentTimeMillis()}.mp4")
-
-            if (imageFile == null || videoFile == null) return@withContext null
-
-            // 2. Execute Native C++ Processing
-            val success = generateMotionNative(
-                imageFile.absolutePath,
-                videoFile.absolutePath,
-                outputFile.absolutePath
-            )
-
-            if (success && outputFile.exists()) {
-                // 3. Clean up cache inputs to save storage
-                imageFile.delete()
-                videoFile.delete()
-                return@withContext Uri.fromFile(outputFile)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-        return@withContext null
-    }
-
-    private fun copyUriToCache(context: Context, uri: Uri, fileName: String): File? {
-        val file = File(context.cacheDir, fileName)
-        return try {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(file).use { output ->
-                    input.copyTo(output)
-                }
-            }
-            file
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MotionForgeScreen(
-    onGenerate: suspend (Context, Uri, Uri) -> Uri?
-) {
+fun MotionForgeApp() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val scrollState = rememberScrollState()
 
     var sourceImageUri by remember { mutableStateOf<Uri?>(null) }
     var drivingVideoUri by remember { mutableStateOf<Uri?>(null) }
-    var outputVideoUri by remember { mutableStateOf<Uri?>(null) }
-    var isProcessing by remember { mutableStateOf(false) }
+    var resultVideoUri by remember { mutableStateOf<Uri?>(null) }
+    var isGenerating by remember { mutableStateOf(false) }
 
-    val imagePicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? -> sourceImageUri = uri }
+    // Launchers for picking media
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) sourceImageUri = uri
+    }
+    val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) drivingVideoUri = uri
+    }
 
-    val videoPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? -> drivingVideoUri = uri }
+    // Launcher for saving the generated file securely using SAF
+    val saveDocumentLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("video/mp4")) { destUri ->
+        if (destUri != null && resultVideoUri != null) {
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    context.contentResolver.openInputStream(resultVideoUri!!)?.use { input ->
+                        context.contentResolver.openOutputStream(destUri)?.use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("MotionForge") },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             )
         }
@@ -149,126 +98,175 @@ fun MotionForgeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(scrollState)
+                .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            
-            // --- Input Section ---
-            Card(modifier = Modifier.fillMaxWidth()) {
+            // Input Selection Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                // Source Image Column
                 Column(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier.weight(1f),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Text("1. Source Profile Image", style = MaterialTheme.typography.titleMedium)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .background(Color.LightGray)
+                    ) {
+                        sourceImageUri?.let { uri ->
+                            Image(
+                                painter = rememberAsyncImagePainter(uri),
+                                contentDescription = "Source Image",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        } ?: Text(
+                            "No Image",
+                            modifier = Modifier.align(Alignment.Center),
+                            color = Color.DarkGray
+                        )
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
-                    Button(onClick = { imagePicker.launch("image/*") }) {
-                        Text(if (sourceImageUri != null) "Image Selected" else "Select Image")
+                    Button(
+                        onClick = {
+                            imagePicker.launch(
+                                androidx.activity.result.PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.ImageOnly
+                                )
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Select Image")
+                    }
+                }
+
+                // Driving Video Column
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                            .background(Color.LightGray)
+                    ) {
+                        drivingVideoUri?.let { uri ->
+                            VideoPreview(uri)
+                        } ?: Text(
+                            "No Video",
+                            modifier = Modifier.align(Alignment.Center),
+                            color = Color.DarkGray
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            videoPicker.launch(
+                                androidx.activity.result.PickVisualMediaRequest(
+                                    ActivityResultContracts.PickVisualMedia.VideoOnly
+                                )
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Select Video")
                     }
                 }
             }
 
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text("2. Driving Movement Video", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(onClick = { videoPicker.launch("video/*") }) {
-                        Text(if (drivingVideoUri != null) "Video Selected" else "Select Video")
-                    }
-                }
-            }
+            Divider(modifier = Modifier.padding(vertical = 8.dp))
 
-            // --- Generation Section ---
+            // Generation Section
             Button(
                 onClick = {
                     if (sourceImageUri != null && drivingVideoUri != null) {
-                        isProcessing = true
-                        outputVideoUri = null
+                        isGenerating = true
+                        resultVideoUri = null
                         coroutineScope.launch {
-                            val resultUri = onGenerate(context, sourceImageUri!!, drivingVideoUri!!)
-                            outputVideoUri = resultUri
-                            isProcessing = false
-                            
-                            if (resultUri == null) {
-                                Toast.makeText(context, "Generation failed.", Toast.LENGTH_SHORT).show()
-                            }
+                            resultVideoUri = generateAnimation(context, sourceImageUri!!, drivingVideoUri!!)
+                            isGenerating = false
                         }
-                    } else {
-                        Toast.makeText(context, "Please select both image and video.", Toast.LENGTH_SHORT).show()
                     }
                 },
-                enabled = !isProcessing,
-                modifier = Modifier.fillMaxWidth().height(56.dp)
+                enabled = sourceImageUri != null && drivingVideoUri != null && !isGenerating,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                if (isProcessing) {
-                    CircularProgressIndicator(
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text("Processing Tensor Models...")
-                } else {
-                    Text("Generate Motion")
-                }
+                Text(if (isGenerating) "Processing Output..." else "Generate Animation")
             }
 
-            // --- Output Section ---
-            if (outputVideoUri != null) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+            if (isGenerating) {
+                CircularProgressIndicator()
+            }
+
+            // Output Review & Save Section
+            if (resultVideoUri != null) {
+                Text("Result Preview:", style = MaterialTheme.typography.titleMedium)
+                
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.8f)
+                        .aspectRatio(1f)
+                        .background(Color.Black)
                 ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text("Generation Complete", style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        Button(
-                            onClick = {
-                                saveVideoToMediaStore(context, outputVideoUri!!)
-                            }
-                        ) {
-                            Text("Save to Device Media")
-                        }
-                    }
+                    VideoPreview(resultVideoUri!!)
+                }
+
+                Button(
+                    onClick = {
+                        // Triggers the system UI to select a designated save location
+                        saveDocumentLauncher.launch("MotionForge_Export_${System.currentTimeMillis()}.mp4")
+                    },
+                    modifier = Modifier.fillMaxWidth(0.8f)
+                ) {
+                    Text("Save Locally")
                 }
             }
         }
     }
 }
 
-/**
- * Saves the cached output video to the public Android MediaStore (Scoped Storage compliant).
- * This eliminates the need for legacy WRITE_EXTERNAL_STORAGE permissions on Android 10+.
- */
-fun saveVideoToMediaStore(context: Context, cachedVideoUri: Uri) {
-    val resolver = context.contentResolver
-    val contentValues = ContentValues().apply {
-        put(MediaStore.MediaColumns.DISPLAY_NAME, "MotionForge_${System.currentTimeMillis()}.mp4")
-        put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
-        put(MediaStore.MediaColumns.RELATIVE_PATH, "Movies/MotionForge")
-    }
-
-    val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues)
-    
-    if (uri != null) {
-        try {
-            resolver.openOutputStream(uri)?.use { outputStream ->
-                val cachedFile = File(cachedVideoUri.path!!)
-                cachedFile.inputStream().use { inputStream ->
-                    inputStream.copyTo(outputStream)
+@Composable
+fun VideoPreview(uri: Uri) {
+    AndroidView(
+        factory = { ctx ->
+            VideoView(ctx).apply {
+                setVideoURI(uri)
+                setOnPreparedListener { mp ->
+                    mp.isLooping = true
+                    // Mute for preview purposes
+                    mp.setVolume(0f, 0f)
+                    start()
                 }
             }
-            Toast.makeText(context, "Saved to Movies/MotionForge", Toast.LENGTH_LONG).show()
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(context, "Failed to save file.", Toast.LENGTH_SHORT).show()
+        },
+        modifier = Modifier.fillMaxSize()
+    )
+}
+
+/**
+ * Placeholder processing pipeline.
+ * Re-route your JNI ONNX integration here. For functional testing of the UI and save pipeline, 
+ * this mimics the generation process by duplicating the input video to cache.
+ */
+suspend fun generateAnimation(context: Context, imageUri: Uri, videoUri: Uri): Uri = withContext(Dispatchers.IO) {
+    // Simulate generation delay
+    delay(2500)
+    
+    val tempFile = File(context.cacheDir, "temp_gen_${System.currentTimeMillis()}.mp4")
+    
+    context.contentResolver.openInputStream(videoUri)?.use { input ->
+        FileOutputStream(tempFile).use { output ->
+            input.copyTo(output)
         }
     }
+    
+    Uri.fromFile(tempFile)
 }
