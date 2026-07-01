@@ -7,7 +7,6 @@ import android.media.MediaFormat
 import android.os.Bundle
 import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
-import java.nio.ByteBuffer
 
 class MainActivity : AppCompatActivity() {
     private lateinit var encoder: MediaCodec
@@ -48,10 +47,6 @@ class MainActivity : AppCompatActivity() {
                     Thread.sleep(10)
                     continue
                 }
-                MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> {
-                    // Handle buffer changes if needed
-                    continue
-                }
                 MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                     // Handle format changes if needed
                     continue
@@ -62,7 +57,6 @@ class MainActivity : AppCompatActivity() {
                         break
                     }
                     if (outputBufferIndex >= 0) {
-                        val outputBuffer = encoder.getOutputBuffer(outputBufferIndex)
                         // Process output buffer (e.g., write to file or send to decoder)
                         encoder.releaseOutputBuffer(outputBufferIndex, false)
                     }
