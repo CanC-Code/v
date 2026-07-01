@@ -127,7 +127,6 @@ void FommEngine::tensorToBitmap(const float* tensorData, void* outPixels, int wi
             float r = std::max(0.0f, std::min(1.0f, tensorData[srcIdx]));
             float g = std::max(0.0f, std::min(1.0f, tensorData[srcIdx + 1]));
             float b = std::max(0.0f, std::min(1.0f, tensorData[srcIdx + 2]));
-
             uint8_t r8 = static_cast<uint8_t>(r * 255.0f);
             uint8_t g8 = static_cast<uint8_t>(g * 255.0f);
             uint8_t b8 = static_cast<uint8_t>(b * 255.0f);
@@ -139,10 +138,14 @@ void FommEngine::tensorToBitmap(const float* tensorData, void* outPixels, int wi
 // Extract keypoints from input tensor
 FommEngine::Keypoints FommEngine::extractKeypoints(const std::vector<float>& inputTensor) {
     Keypoints keypoints;
+    if (!kpSession) {
+        LOGE("kpSession is null - initialization failed prior to extraction.");
+        return keypoints;
+    }
+
     try {
         auto kpInputNames = getInputOutputNames(*kpSession, true);
         auto kpOutputNames = getInputOutputNames(*kpSession, false);
-
         if (kpInputNames.empty() || kpOutputNames.empty()) {
             LOGE("No input/output names found for kpSession");
             return keypoints;
@@ -150,22 +153,18 @@ FommEngine::Keypoints FommEngine::extractKeypoints(const std::vector<float>& inp
 
         auto kpInputNamesPtr = stringVecToCharPtrVec(kpInputNames);
         auto kpOutputNamesPtr = stringVecToCharPtrVec(kpOutputNames);
-
         std::vector<int64_t> inputShape = {BATCH_SIZE, CHANNELS, TARGET_SIZE, TARGET_SIZE};
         Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
         Ort::Value inputTensorValue = Ort::Value::CreateTensor<float>(
             memoryInfo, const_cast<float*>(inputTensor.data()), inputTensor.size(), inputShape.data(), inputShape.size());
-
         std::vector<float> kpOutput(BATCH_SIZE * TARGET_SIZE * TARGET_SIZE * 2);
         std::vector<float> jacOutput(BATCH_SIZE * TARGET_SIZE * TARGET_SIZE * 2);
         std::vector<int64_t> kpShape = {BATCH_SIZE, TARGET_SIZE, TARGET_SIZE, 2};
         std::vector<int64_t> jacShape = {BATCH_SIZE, TARGET_SIZE, TARGET_SIZE, 2};
-
         Ort::Value kpOutputTensor = Ort::Value::CreateTensor<float>(
             memoryInfo, kpOutput.data(), kpOutput.size(), kpShape.data(), kpShape.size());
         Ort::Value jacOutputTensor = Ort::Value::CreateTensor<float>(
             memoryInfo, jacOutput.data(), jacOutput.size(), jacShape.data(), jacShape.size());
-
         Ort::Value outputTensors[] = {
             std::move(kpOutputTensor),
             std::move(jacOutputTensor)
@@ -175,7 +174,6 @@ FommEngine::Keypoints FommEngine::extractKeypoints(const std::vector<float>& inp
             kpInputNamesPtr.data(), &inputTensorValue, 1,
             kpOutputNamesPtr.data(), outputTensors, 2
         );
-
         keypoints.kp = kpOutput;
         keypoints.jac = jacOutput;
         keypoints.kp_shape = kpShape;
@@ -188,18 +186,20 @@ FommEngine::Keypoints FommEngine::extractKeypoints(const std::vector<float>& inp
 
 // Core pipeline: process a frame
 bool FommEngine::processFrame(void* sourcePixels, void* drivingPixels, void* outputPixels, int width, int height) {
+    if (!kpSession || !genSession) {
+        LOGE("Cannot process frame: ONNX sessions were not successfully initialized.");
+        return false;
+    }
+
     try {
         LOGD("Processing frame: width=%d, height=%d", width, height);
-
         std::vector<float> sourceTensor = bitmapToTensor(sourcePixels, width, height);
         std::vector<float> drivingTensor = bitmapToTensor(drivingPixels, width, height);
 
         Keypoints sourceKeypoints = extractKeypoints(sourceTensor);
         Keypoints drivingKeypoints = extractKeypoints(drivingTensor);
-
         auto genInputNames = getInputOutputNames(*genSession, true);
         auto genOutputNames = getInputOutputNames(*genSession, false);
-
         if (genInputNames.empty() || genOutputNames.empty()) {
             LOGE("No input/output names found for genSession");
             return false;
@@ -207,23 +207,19 @@ bool FommEngine::processFrame(void* sourcePixels, void* drivingPixels, void* out
 
         auto genInputNamesPtr = stringVecToCharPtrVec(genInputNames);
         auto genOutputNamesPtr = stringVecToCharPtrVec(genOutputNames);
-
         std::vector<int64_t> inputShape = {BATCH_SIZE, CHANNELS, TARGET_SIZE, TARGET_SIZE};
         Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
         Ort::Value inputTensorValue = Ort::Value::CreateTensor<float>(
             memoryInfo, const_cast<float*>(sourceTensor.data()), sourceTensor.size(), inputShape.data(), inputShape.size());
-
         std::vector<float> outputTensor(BATCH_SIZE * CHANNELS * TARGET_SIZE * TARGET_SIZE);
         std::vector<int64_t> outputShape = {BATCH_SIZE, CHANNELS, TARGET_SIZE, TARGET_SIZE};
         Ort::Value outputTensorValue = Ort::Value::CreateTensor<float>(
             memoryInfo, outputTensor.data(), outputTensor.size(), outputShape.data(), outputShape.size());
-
         genSession->Run(
             Ort::RunOptions{nullptr},
             genInputNamesPtr.data(), &inputTensorValue, 1,
             genOutputNamesPtr.data(), &outputTensorValue, 1
         );
-
         tensorToBitmap(outputTensor.data(), outputPixels, width, height);
         LOGD("Frame processed successfully");
         return true;
