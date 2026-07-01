@@ -1,40 +1,38 @@
-// native_bridge.cpp
 #include <jni.h>
+#include <string>
+#include <android/log.h>
 #include "fomm_engine.h"
 
-// Declare the global FommEngine instance (defined in fomm_engine.cpp)
+// Expose global engine instance initialized in fomm_engine.cpp
 extern FommEngine* gFommEngine;
 
-// JNI: Initialize Engine
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_motionforge_app_MotionEngine_initEngine(
-    JNIEnv* env,
-    jobject /* this */,
-    jstring kpModelPath,
-    jstring genModelPath
-) {
+// Forward declare the helper functions that were implemented in fomm_engine.cpp
+// but missing from the header. This resolves the 'undeclared identifier' errors.
+extern std::string jstringToString(JNIEnv* env, jstring jstr);
+extern void* byteArrayToVoidPtr(JNIEnv* env, jbyteArray array);
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_motionforge_app_MainActivity_initializeEngine(JNIEnv* env, jobject /* this */, jstring kpModelPath, jstring genModelPath) {
     try {
         std::string kpPath = jstringToString(env, kpModelPath);
         std::string genPath = jstringToString(env, genModelPath);
-        gFommEngine = new FommEngine();
-        return gFommEngine->initialize(kpPath, genPath);
+
+        if (!gFommEngine) {
+            gFommEngine = new FommEngine();
+        }
+        
+        bool success = gFommEngine->initialize(kpPath, genPath);
+        return success ? JNI_TRUE : JNI_FALSE;
     } catch (const std::exception& e) {
         __android_log_print(ANDROID_LOG_ERROR, "native_bridge", "JNI initialize failed: %s", e.what());
         return JNI_FALSE;
     }
 }
 
-// JNI: Process Frame
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_motionforge_app_MotionEngine_processFrame(
-    JNIEnv* env,
-    jobject /* this */,
-    jbyteArray sourcePixels,
-    jbyteArray drivingPixels,
-    jbyteArray outputPixels,
-    jint width,
-    jint height
-) {
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_motionforge_app_MainActivity_processFrameNative(JNIEnv* env, jobject /* this */, jbyteArray sourcePixels, jbyteArray drivingPixels, jbyteArray outputPixels, jint width, jint height) {
     if (!gFommEngine) {
         __android_log_print(ANDROID_LOG_ERROR, "native_bridge", "FommEngine not initialized");
         return JNI_FALSE;
@@ -44,23 +42,6 @@ Java_com_motionforge_app_MotionEngine_processFrame(
     void* drvPtr = byteArrayToVoidPtr(env, drivingPixels);
     void* outPtr = byteArrayToVoidPtr(env, outputPixels);
 
-    bool result = gFommEngine->processFrame(srcPtr, drvPtr, outPtr, width, height);
-
-    if (sourcePixels) env->ReleaseByteArrayElements(sourcePixels, static_cast<jbyte*>(srcPtr), JNI_ABORT);
-    if (drivingPixels) env->ReleaseByteArrayElements(drivingPixels, static_cast<jbyte*>(drvPtr), JNI_ABORT);
-    if (outputPixels) env->ReleaseByteArrayElements(outputPixels, static_cast<jbyte*>(outPtr), 0);
-
-    return result ? JNI_TRUE : JNI_FALSE;
-}
-
-// JNI: Release Engine
-extern "C" JNIEXPORT void JNICALL
-Java_com_motionforge_app_MotionEngine_releaseEngine(
-    JNIEnv* env,
-    jobject /* this */
-) {
-    if (gFommEngine) {
-        delete gFommEngine;
-        gFommEngine = nullptr;
-    }
+    bool success = gFommEngine->processFrame(srcPtr, drvPtr, outPtr, width, height);
+    return success ? JNI_TRUE : JNI_FALSE;
 }
