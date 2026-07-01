@@ -7,34 +7,32 @@ import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var fommEngineWrapper: FommEngineWrapper
+    private lateinit var motionEngine: MotionEngine
     private lateinit var sourceBitmap: Bitmap
     private lateinit var drivingBitmap: Bitmap
     private lateinit var outputBitmap: Bitmap
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        fommEngineWrapper = FommEngineWrapper()
-        initializeFommEngine()
+        motionEngine = MotionEngine()
+        initializeEngine()
         loadTestBitmaps()
         processTestFrame()
     }
 
-    private fun initializeFommEngine() {
+    private fun initializeEngine() {
         try {
-            // Replace with actual paths to your ONNX models
             val kpModelPath = "$filesDir/kp_model.onnx"
             val genModelPath = "$filesDir/gen_model.onnx"
-            if (!fommEngineWrapper.initialize(kpModelPath, genModelPath)) {
-                Log.e("MainActivity", "Failed to initialize FommEngine")
+            if (!motionEngine.initEngine(kpModelPath, genModelPath)) {
+                Log.e("MainActivity", "Failed to initialize MotionEngine")
             }
         } catch (e: Exception) {
-            Log.e("MainActivity", "Exception in initializeFommEngine: ${e.message}")
+            Log.e("MainActivity", "Exception in initializeEngine: ${e.message}")
         }
     }
 
     private fun loadTestBitmaps() {
-        // Load or create test bitmaps (replace with your actual bitmaps)
         sourceBitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
         drivingBitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
         outputBitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
@@ -42,7 +40,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun processTestFrame() {
         try {
-            // Extract pixels from bitmaps
             val sourcePixels = IntArray(256 * 256)
             val drivingPixels = IntArray(256 * 256)
             val outputPixels = IntArray(256 * 256)
@@ -50,13 +47,11 @@ class MainActivity : AppCompatActivity() {
             sourceBitmap.getPixels(sourcePixels, 0, 256, 0, 0, 256, 256)
             drivingBitmap.getPixels(drivingPixels, 0, 256, 0, 0, 256, 256)
 
-            // Convert IntArray to ByteArray (RGBA to bytes)
             val sourceBytes = intArrayToByteArray(sourcePixels)
             val drivingBytes = intArrayToByteArray(drivingPixels)
-            val outputBytes = ByteArray(256 * 256 * 4) // RGBA
+            val outputBytes = ByteArray(256 * 256 * 4)
 
-            // Process frame
-            val result = fommEngineWrapper.processFrame(
+            val result = motionEngine.processFrame(
                 sourceBytes,
                 drivingBytes,
                 outputBytes,
@@ -65,7 +60,6 @@ class MainActivity : AppCompatActivity() {
             )
 
             if (result) {
-                // Convert output bytes back to IntArray
                 val outputInts = byteArrayToIntArray(outputBytes)
                 outputBitmap.setPixels(outputInts, 0, 256, 0, 0, 256, 256)
                 Log.d("MainActivity", "Frame processed successfully")
@@ -77,7 +71,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Helper: Convert IntArray (RGBA) to ByteArray
     private fun intArrayToByteArray(ints: IntArray): ByteArray {
         val bytes = ByteArray(ints.size * 4)
         for (i in ints.indices) {
@@ -90,7 +83,6 @@ class MainActivity : AppCompatActivity() {
         return bytes
     }
 
-    // Helper: Convert ByteArray (RGBA) to IntArray
     private fun byteArrayToIntArray(bytes: ByteArray): IntArray {
         val ints = IntArray(bytes.size / 4)
         for (i in ints.indices) {
@@ -101,5 +93,10 @@ class MainActivity : AppCompatActivity() {
             ints[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
         }
         return ints
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        motionEngine.releaseEngine()
     }
 }
