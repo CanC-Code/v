@@ -7,14 +7,16 @@ import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var motionEngine: MotionEngine
+    private lateinit var motionEngine: FommEngineWrapper
     private lateinit var sourceBitmap: Bitmap
     private lateinit var drivingBitmap: Bitmap
     private lateinit var outputBitmap: Bitmap
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        motionEngine = MotionEngine()
+        
+        // Correctly target FommEngineWrapper instead of the undefined MotionEngine
+        motionEngine = FommEngineWrapper()
         initializeEngine()
         loadTestBitmaps()
         processTestFrame()
@@ -24,8 +26,10 @@ class MainActivity : AppCompatActivity() {
         try {
             val kpModelPath = "$filesDir/kp_model.onnx"
             val genModelPath = "$filesDir/gen_model.onnx"
-            if (!motionEngine.initEngine(kpModelPath, genModelPath)) {
-                Log.e("MainActivity", "Failed to initialize MotionEngine")
+            
+            // Replaced initEngine with correct initialize call
+            if (!motionEngine.initialize(kpModelPath, genModelPath)) {
+                Log.e("MainActivity", "Failed to initialize FommEngineWrapper")
             }
         } catch (e: Exception) {
             Log.e("MainActivity", "Exception in initializeEngine: ${e.message}")
@@ -75,10 +79,10 @@ class MainActivity : AppCompatActivity() {
         val bytes = ByteArray(ints.size * 4)
         for (i in ints.indices) {
             val pixel = ints[i]
-            bytes[i * 4] = (pixel shr 16 and 0xFF).toByte() // R
-            bytes[i * 4 + 1] = (pixel shr 8 and 0xFF).toByte() // G
-            bytes[i * 4 + 2] = (pixel and 0xFF).toByte() // B
-            bytes[i * 4 + 3] = (pixel shr 24 and 0xFF).toByte() // A
+            bytes[i * 4] = (pixel shr 24 and 0xFF).toByte()
+            bytes[i * 4 + 1] = (pixel shr 16 and 0xFF).toByte()
+            bytes[i * 4 + 2] = (pixel shr 8 and 0xFF).toByte()
+            bytes[i * 4 + 3] = (pixel and 0xFF).toByte()
         }
         return bytes
     }
@@ -86,17 +90,11 @@ class MainActivity : AppCompatActivity() {
     private fun byteArrayToIntArray(bytes: ByteArray): IntArray {
         val ints = IntArray(bytes.size / 4)
         for (i in ints.indices) {
-            val r = bytes[i * 4].toInt() and 0xFF
-            val g = bytes[i * 4 + 1].toInt() and 0xFF
-            val b = bytes[i * 4 + 2].toInt() and 0xFF
-            val a = bytes[i * 4 + 3].toInt() and 0xFF
-            ints[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
+            ints[i] = (bytes[i * 4].toInt() and 0xFF shl 24) or
+                      (bytes[i * 4 + 1].toInt() and 0xFF shl 16) or
+                      (bytes[i * 4 + 2].toInt() and 0xFF shl 8) or
+                      (bytes[i * 4 + 3].toInt() and 0xFF)
         }
         return ints
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        motionEngine.releaseEngine()
     }
 }
