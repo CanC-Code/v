@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <vector>
+#include <cstring>
 #include <utility>
 
 #define LOG_TAG "FommEngine"
@@ -13,21 +14,14 @@
 // Global FommEngine instance
 FommEngine* gFommEngine = nullptr;
 
-// Helper function: Convert jstring to std::string
+// Helper function: Convert jstring to std::string safely
 std::string jstringToString(JNIEnv* env, jstring jstr) {
     if (!jstr) return "";
     const char* chars = env->GetStringUTFChars(jstr, nullptr);
+    if (!chars) return "";
     std::string str(chars);
     env->ReleaseStringUTFChars(jstr, chars);
     return str;
-}
-
-// Helper function: Convert Java byte array to void*
-void* byteArrayToVoidPtr(JNIEnv* env, jbyteArray array) {
-    if (!array) return nullptr;
-    jsize len = env->GetArrayLength(array);
-    jbyte* bytes = env->GetByteArrayElements(array, nullptr);
-    return static_cast<void*>(bytes);
 }
 
 // Constructor
@@ -84,21 +78,20 @@ bool FommEngine::initialize(const std::string& kpModelPath, const std::string& g
     }
 }
 
-// Convert bitmap pixels to tensor (RGBA to RGB + normalize)
+// Convert bitmap pixels to tensor (Alignment safe memcpy)
 std::vector<float> FommEngine::bitmapToTensor(void* pixels, int width, int height) {
     std::vector<float> tensor(BATCH_SIZE * CHANNELS * TARGET_SIZE * TARGET_SIZE, 0.0f);
-    if (!pixels) {
-        LOGE("bitmapToTensor: pixels is null");
-        return tensor;
-    }
+    if (!pixels) return tensor;
 
-    uint32_t* rgbaPixels = static_cast<uint32_t*>(pixels);
+    uint8_t* bytePixels = static_cast<uint8_t*>(pixels);
     for (int y = 0; y < std::min(height, static_cast<int>(TARGET_SIZE)); ++y) {
         for (int x = 0; x < std::min(width, static_cast<int>(TARGET_SIZE)); ++x) {
             int srcIdx = y * width + x;
             int dstIdx = (y * TARGET_SIZE + x) * CHANNELS;
 
-            uint32_t pixel = rgbaPixels[srcIdx];
+            uint32_t pixel = 0;
+            std::memcpy(&pixel, bytePixels + srcIdx * 4, 4);
+
             float r = static_cast<float>((pixel >> 16) & 0xFF) / 255.0f;
             float g = static_cast<float>((pixel >> 8) & 0xFF) / 255.0f;
             float b = static_cast<float>(pixel & 0xFF) / 255.0f;
@@ -111,14 +104,11 @@ std::vector<float> FommEngine::bitmapToTensor(void* pixels, int width, int heigh
     return tensor;
 }
 
-// Convert tensor to bitmap pixels (RGB to RGBA)
+// Convert tensor to bitmap pixels (Alignment safe memcpy)
 void FommEngine::tensorToBitmap(const float* tensorData, void* outPixels, int width, int height) {
-    if (!outPixels || !tensorData) {
-        LOGE("tensorToBitmap: outPixels or tensorData is null");
-        return;
-    }
+    if (!outPixels || !tensorData) return;
 
-    uint32_t* rgbaPixels = static_cast<uint32_t*>(outPixels);
+    uint8_t* bytePixels = static_cast<uint8_t*>(outPixels);
     for (int y = 0; y < std::min(height, static_cast<int>(TARGET_SIZE)); ++y) {
         for (int x = 0; x < std::min(width, static_cast<int>(TARGET_SIZE)); ++x) {
             int srcIdx = (y * TARGET_SIZE + x) * CHANNELS;
@@ -127,102 +117,126 @@ void FommEngine::tensorToBitmap(const float* tensorData, void* outPixels, int wi
             float r = std::max(0.0f, std::min(1.0f, tensorData[srcIdx]));
             float g = std::max(0.0f, std::min(1.0f, tensorData[srcIdx + 1]));
             float b = std::max(0.0f, std::min(1.0f, tensorData[srcIdx + 2]));
+            
             uint8_t r8 = static_cast<uint8_t>(r * 255.0f);
             uint8_t g8 = static_cast<uint8_t>(g * 255.0f);
             uint8_t b8 = static_cast<uint8_t>(b * 255.0f);
-            rgbaPixels[dstIdx] = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+            
+            uint32_t pixel = (0xFF << 24) | (r8 << 16) | (g8 << 8) | b8;
+            std::memcpy(bytePixels + dstIdx * 4, &pixel, 4);
         }
     }
 }
 
-// Extract keypoints from input tensor
+// Extract keypoints using dynamic output retrieval to prevent array bounds segfaults
 FommEngine::Keypoints FommEngine::extractKeypoints(const std::vector<float>& inputTensor) {
     Keypoints keypoints;
-    if (!kpSession) {
-        LOGE("kpSession is null - initialization failed prior to extraction.");
-        return keypoints;
-    }
+    if (!kpSession) return keypoints;
 
     try {
         auto kpInputNames = getInputOutputNames(*kpSession, true);
         auto kpOutputNames = getInputOutputNames(*kpSession, false);
-        if (kpInputNames.empty() || kpOutputNames.empty()) {
-            LOGE("No input/output names found for kpSession");
-            return keypoints;
-        }
+        if (kpInputNames.empty() || kpOutputNames.empty()) return keypoints;
 
         auto kpInputNamesPtr = stringVecToCharPtrVec(kpInputNames);
         auto kpOutputNamesPtr = stringVecToCharPtrVec(kpOutputNames);
+
         std::vector<int64_t> inputShape = {BATCH_SIZE, CHANNELS, TARGET_SIZE, TARGET_SIZE};
         Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+        
         Ort::Value inputTensorValue = Ort::Value::CreateTensor<float>(
             memoryInfo, const_cast<float*>(inputTensor.data()), inputTensor.size(), inputShape.data(), inputShape.size());
-        std::vector<float> kpOutput(BATCH_SIZE * TARGET_SIZE * TARGET_SIZE * 2);
-        std::vector<float> jacOutput(BATCH_SIZE * TARGET_SIZE * TARGET_SIZE * 2);
-        std::vector<int64_t> kpShape = {BATCH_SIZE, TARGET_SIZE, TARGET_SIZE, 2};
-        std::vector<int64_t> jacShape = {BATCH_SIZE, TARGET_SIZE, TARGET_SIZE, 2};
-        Ort::Value kpOutputTensor = Ort::Value::CreateTensor<float>(
-            memoryInfo, kpOutput.data(), kpOutput.size(), kpShape.data(), kpShape.size());
-        Ort::Value jacOutputTensor = Ort::Value::CreateTensor<float>(
-            memoryInfo, jacOutput.data(), jacOutput.size(), jacShape.data(), jacShape.size());
-        Ort::Value outputTensors[] = {
-            std::move(kpOutputTensor),
-            std::move(jacOutputTensor)
-        };
-        kpSession->Run(
-            Ort::RunOptions{nullptr},
+
+        // Properly initialized Ort::RunOptions() avoids the RunOptions{nullptr} crash
+        auto outputTensors = kpSession->Run(
+            Ort::RunOptions(), 
             kpInputNamesPtr.data(), &inputTensorValue, 1,
-            kpOutputNamesPtr.data(), outputTensors, 2
+            kpOutputNamesPtr.data(), kpOutputNamesPtr.size() 
         );
-        keypoints.kp = kpOutput;
-        keypoints.jac = jacOutput;
-        keypoints.kp_shape = kpShape;
-        keypoints.jac_shape = jacShape;
+
+        if (!outputTensors.empty()) {
+            float* kpData = outputTensors[0].GetTensorMutableData<float>();
+            size_t kpSize = outputTensors[0].GetTensorTypeAndShapeInfo().GetElementCount();
+            keypoints.kp.assign(kpData, kpData + kpSize);
+            
+            if (outputTensors.size() > 1) {
+                float* jacData = outputTensors[1].GetTensorMutableData<float>();
+                size_t jacSize = outputTensors[1].GetTensorTypeAndShapeInfo().GetElementCount();
+                keypoints.jac.assign(jacData, jacData + jacSize);
+            }
+        }
     } catch (const std::exception& e) {
         LOGE("Exception in extractKeypoints: %s", e.what());
     }
     return keypoints;
 }
 
-// Core pipeline: process a frame
+// Process frame dynamically matching inputs to the generator requirements
 bool FommEngine::processFrame(void* sourcePixels, void* drivingPixels, void* outputPixels, int width, int height) {
-    if (!kpSession || !genSession) {
-        LOGE("Cannot process frame: ONNX sessions were not successfully initialized.");
-        return false;
-    }
+    if (!kpSession || !genSession) return false;
 
     try {
-        LOGD("Processing frame: width=%d, height=%d", width, height);
         std::vector<float> sourceTensor = bitmapToTensor(sourcePixels, width, height);
         std::vector<float> drivingTensor = bitmapToTensor(drivingPixels, width, height);
 
         Keypoints sourceKeypoints = extractKeypoints(sourceTensor);
         Keypoints drivingKeypoints = extractKeypoints(drivingTensor);
+
         auto genInputNames = getInputOutputNames(*genSession, true);
         auto genOutputNames = getInputOutputNames(*genSession, false);
-        if (genInputNames.empty() || genOutputNames.empty()) {
-            LOGE("No input/output names found for genSession");
-            return false;
-        }
+        if (genInputNames.empty() || genOutputNames.empty()) return false;
 
         auto genInputNamesPtr = stringVecToCharPtrVec(genInputNames);
         auto genOutputNamesPtr = stringVecToCharPtrVec(genOutputNames);
-        std::vector<int64_t> inputShape = {BATCH_SIZE, CHANNELS, TARGET_SIZE, TARGET_SIZE};
+
         Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-        Ort::Value inputTensorValue = Ort::Value::CreateTensor<float>(
-            memoryInfo, const_cast<float*>(sourceTensor.data()), sourceTensor.size(), inputShape.data(), inputShape.size());
-        std::vector<float> outputTensor(BATCH_SIZE * CHANNELS * TARGET_SIZE * TARGET_SIZE);
-        std::vector<int64_t> outputShape = {BATCH_SIZE, CHANNELS, TARGET_SIZE, TARGET_SIZE};
-        Ort::Value outputTensorValue = Ort::Value::CreateTensor<float>(
-            memoryInfo, outputTensor.data(), outputTensor.size(), outputShape.data(), outputShape.size());
-        genSession->Run(
-            Ort::RunOptions{nullptr},
-            genInputNamesPtr.data(), &inputTensorValue, 1,
-            genOutputNamesPtr.data(), &outputTensorValue, 1
+        std::vector<Ort::Value> inputTensors;
+
+        // Input 0: Source Image
+        std::vector<int64_t> imgShape = {BATCH_SIZE, CHANNELS, TARGET_SIZE, TARGET_SIZE};
+        inputTensors.push_back(Ort::Value::CreateTensor<float>(
+            memoryInfo, sourceTensor.data(), sourceTensor.size(), imgShape.data(), imgShape.size()));
+
+        // Bind subsequent expected inputs (kp_driving, kp_source, jacobians) based on graph requirements
+        if (genInputNames.size() > 1 && !drivingKeypoints.kp.empty() && !sourceKeypoints.kp.empty()) {
+            int64_t num_kp = drivingKeypoints.kp.size() / 2;
+            std::vector<int64_t> kpShape = {BATCH_SIZE, num_kp, 2};
+            
+            inputTensors.push_back(Ort::Value::CreateTensor<float>(
+                memoryInfo, drivingKeypoints.kp.data(), drivingKeypoints.kp.size(), kpShape.data(), kpShape.size()));
+                
+            if (genInputNames.size() > 2) {
+                inputTensors.push_back(Ort::Value::CreateTensor<float>(
+                    memoryInfo, sourceKeypoints.kp.data(), sourceKeypoints.kp.size(), kpShape.data(), kpShape.size()));
+            }
+            if (genInputNames.size() > 3 && !drivingKeypoints.jac.empty()) {
+                 std::vector<int64_t> jacShape = {BATCH_SIZE, num_kp, 2, 2};
+                 inputTensors.push_back(Ort::Value::CreateTensor<float>(
+                    memoryInfo, drivingKeypoints.jac.data(), drivingKeypoints.jac.size(), jacShape.data(), jacShape.size()));
+            }
+            if (genInputNames.size() > 4 && !sourceKeypoints.jac.empty()) {
+                 std::vector<int64_t> jacShape = {BATCH_SIZE, num_kp, 2, 2};
+                 inputTensors.push_back(Ort::Value::CreateTensor<float>(
+                    memoryInfo, sourceKeypoints.jac.data(), sourceKeypoints.jac.size(), jacShape.data(), jacShape.size()));
+            }
+        }
+
+        size_t inputCount = std::min(inputTensors.size(), genInputNamesPtr.size());
+        
+        auto outputTensors = genSession->Run(
+            Ort::RunOptions(),
+            genInputNamesPtr.data(), inputTensors.data(), inputCount,
+            genOutputNamesPtr.data(), genOutputNamesPtr.size()
         );
-        tensorToBitmap(outputTensor.data(), outputPixels, width, height);
-        LOGD("Frame processed successfully");
-        return true;
+
+        if (!outputTensors.empty()) {
+            float* outData = outputTensors[0].GetTensorMutableData<float>();
+            tensorToBitmap(outData, outputPixels, width, height);
+            LOGD("Frame processed successfully");
+            return true;
+        }
+
+        return false;
     } catch (const std::exception& e) {
         LOGE("Exception in processFrame: %s", e.what());
         return false;
