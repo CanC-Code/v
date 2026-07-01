@@ -14,6 +14,23 @@
 // Global FommEngine instance
 static FommEngine* gFommEngine = nullptr;
 
+// Helper function: Convert jstring to std::string
+std::string jstringToString(JNIEnv* env, jstring jstr) {
+    if (!jstr) return "";
+    const char* chars = env->GetStringUTFChars(jstr, nullptr);
+    std::string str(chars);
+    env->ReleaseStringUTFChars(jstr, chars);
+    return str;
+}
+
+// Helper function: Convert Java byte array to void*
+void* byteArrayToVoidPtr(JNIEnv* env, jbyteArray array) {
+    if (!array) return nullptr;
+    jsize len = env->GetArrayLength(array);
+    jbyte* bytes = env->GetByteArrayElements(array, nullptr);
+    return static_cast<void*>(bytes);
+}
+
 // Constructor
 FommEngine::FommEngine()
     : env(std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "FommEngine")),
@@ -77,8 +94,8 @@ std::vector<float> FommEngine::bitmapToTensor(void* pixels, int width, int heigh
     }
 
     uint32_t* rgbaPixels = static_cast<uint32_t*>(pixels);
-    for (int y = 0; y < std::min(height, TARGET_SIZE); ++y) {
-        for (int x = 0; x < std::min(width, TARGET_SIZE); ++x) {
+    for (int y = 0; y < std::min(height, static_cast<int>(TARGET_SIZE)); ++y) {
+        for (int x = 0; x < std::min(width, static_cast<int>(TARGET_SIZE)); ++x) {
             int srcIdx = y * width + x;
             int dstIdx = (y * TARGET_SIZE + x) * CHANNELS;
 
@@ -103,8 +120,8 @@ void FommEngine::tensorToBitmap(const float* tensorData, void* outPixels, int wi
     }
 
     uint32_t* rgbaPixels = static_cast<uint32_t*>(outPixels);
-    for (int y = 0; y < std::min(height, TARGET_SIZE); ++y) {
-        for (int x = 0; x < std::min(width, TARGET_SIZE); ++x) {
+    for (int y = 0; y < std::min(height, static_cast<int>(TARGET_SIZE)); ++y) {
+        for (int x = 0; x < std::min(width, static_cast<int>(TARGET_SIZE)); ++x) {
             int srcIdx = (y * TARGET_SIZE + x) * CHANNELS;
             int dstIdx = y * width + x;
 
@@ -219,7 +236,7 @@ bool FommEngine::processFrame(void* sourcePixels, void* drivingPixels, void* out
 
 // JNI: Initialize FommEngine
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_motionforge_app_FommEngineWrapper_initialize(
+Java_com_motionforge_app_MotionEngine_initEngine(
     JNIEnv* env,
     jobject /* this */,
     jstring kpModelPath,
@@ -238,7 +255,7 @@ Java_com_motionforge_app_FommEngineWrapper_initialize(
 
 // JNI: Process a frame
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_motionforge_app_FommEngineWrapper_processFrame(
+Java_com_motionforge_app_MotionEngine_processFrame(
     JNIEnv* env,
     jobject /* this */,
     jbyteArray sourcePixels,
@@ -265,19 +282,14 @@ Java_com_motionforge_app_FommEngineWrapper_processFrame(
     return result ? JNI_TRUE : JNI_FALSE;
 }
 
-// JNI Helper: Convert jstring to std::string
-std::string jstringToString(JNIEnv* env, jstring jstr) {
-    if (!jstr) return "";
-    const char* chars = env->GetStringUTFChars(jstr, nullptr);
-    std::string str(chars);
-    env->ReleaseStringUTFChars(jstr, chars);
-    return str;
-}
-
-// JNI Helper: Convert Java byte array to void*
-void* byteArrayToVoidPtr(JNIEnv* env, jbyteArray array) {
-    if (!array) return nullptr;
-    jsize len = env->GetArrayLength(array);
-    jbyte* bytes = env->GetByteArrayElements(array, nullptr);
-    return static_cast<void*>(bytes);
+// JNI: Release FommEngine
+extern "C" JNIEXPORT void JNICALL
+Java_com_motionforge_app_MotionEngine_releaseEngine(
+    JNIEnv* env,
+    jobject /* this */
+) {
+    if (gFommEngine) {
+        delete gFommEngine;
+        gFommEngine = nullptr;
+    }
 }
