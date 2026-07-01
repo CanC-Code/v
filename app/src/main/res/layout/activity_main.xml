@@ -9,9 +9,9 @@
     <Button android:id="@+id/btnPickSource" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Select Source Image" />
 
     <ImageView android:id="@+id/imgDriving" android:layout_width="150dp" android:layout_height="150dp" android:background="#DDD" android:layout_gravity="center" android:layout_marginTop="16dp" android:layout_marginBottom="8dp"/>
-    <Button android:id="@+id/btnPickDriving" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Select Driving Image" />
+    <Button android:id="@+id/btnPickDriving" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Select Driving Video" />
 
-    <Button android:id="@+id/btnProcess" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Process" android:layout_marginTop="16dp" />
+    <Button android:id="@+id/btnProcess" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Process" android:layout_marginTop="16dp" android:enabled="false"/>
 
     <ImageView android:id="@+id/imgOutput" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:layout_marginTop="16dp" android:scaleType="fitCenter"/>
 </LinearLayout>
