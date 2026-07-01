@@ -25,12 +25,10 @@ std::vector<std::string> FommEngine::getInputOutputNames(Ort::Session& session, 
     std::vector<std::string> names;
     size_t numNodes = isInput ? session.GetInputCount() : session.GetOutputCount();
     for (size_t i = 0; i < numNodes; ++i) {
-        Ort::AllocatedStringPtr namePtr;
-        if (isInput) {
-            namePtr = session.GetInputNameAllocated(i, allocator);
-        } else {
-            namePtr = session.GetOutputNameAllocated(i, allocator);
-        }
+        // Directly assign the result to Ort::AllocatedStringPtr
+        Ort::AllocatedStringPtr namePtr = isInput ?
+            session.GetInputNameAllocated(i, allocator) :
+            session.GetOutputNameAllocated(i, allocator);
         names.emplace_back(namePtr.get());
     }
     return names;
@@ -104,10 +102,11 @@ FommEngine::Keypoints FommEngine::extractKeypoints(const std::vector<float>& inp
             memoryInfo, jacOutput.data(), jacOutput.size(), jacShape.data(), jacShape.size());
 
         // Run kpSession
+        Ort::Value outputTensors[] = {kpOutputTensor, jacOutputTensor};
         kpSession->Run(
             Ort::RunOptions{nullptr},
             kpInputNamesPtr.data(), &inputTensorValue, 1,
-            kpOutputNamesPtr.data(), 1
+            kpOutputNamesPtr.data(), outputTensors, 2
         );
 
         keypoints.kp = kpOutput;
@@ -155,7 +154,7 @@ bool FommEngine::processFrame(void* sourcePixels, void* drivingPixels, void* out
         genSession->Run(
             Ort::RunOptions{nullptr},
             genInputNamesPtr.data(), &inputTensorValue, 1,
-            genOutputNamesPtr.data(), 1
+            genOutputNamesPtr.data(), &outputTensorValue, 1
         );
 
         // Convert output tensor to bitmap
