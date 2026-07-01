@@ -3,6 +3,7 @@
 #include <android/log.h>
 #include <stdexcept>
 #include <algorithm>
+#include <vector>
 
 #define LOG_TAG "FommEngine"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -24,15 +25,24 @@ std::vector<std::string> FommEngine::getInputOutputNames(Ort::Session& session, 
     std::vector<std::string> names;
     size_t numNodes = isInput ? session.GetInputCount() : session.GetOutputCount();
     for (size_t i = 0; i < numNodes; ++i) {
-        char* name;
+        Ort::AllocatedStringPtr namePtr;
         if (isInput) {
-            session.GetInputNameAllocated(i, allocator, &name);
+            namePtr = session.GetInputNameAllocated(i, allocator);
         } else {
-            session.GetOutputNameAllocated(i, allocator, &name);
+            namePtr = session.GetOutputNameAllocated(i, allocator);
         }
-        names.emplace_back(name);
+        names.emplace_back(namePtr.get());
     }
     return names;
+}
+
+// Helper function to convert std::vector<std::string> to const char* const*
+std::vector<const char*> stringVecToCharPtrVec(const std::vector<std::string>& strings) {
+    std::vector<const char*> charPtrs;
+    for (const auto& str : strings) {
+        charPtrs.push_back(str.c_str());
+    }
+    return charPtrs;
 }
 
 // Initialize ONNX sessions
@@ -72,6 +82,10 @@ FommEngine::Keypoints FommEngine::extractKeypoints(const std::vector<float>& inp
         auto kpInputNames = getInputOutputNames(*kpSession, true);
         auto kpOutputNames = getInputOutputNames(*kpSession, false);
 
+        // Convert to const char* const*
+        auto kpInputNamesPtr = stringVecToCharPtrVec(kpInputNames);
+        auto kpOutputNamesPtr = stringVecToCharPtrVec(kpOutputNames);
+
         // Create input tensor
         std::vector<int64_t> inputShape = {BATCH_SIZE, CHANNELS, TARGET_SIZE, TARGET_SIZE};
         Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
@@ -92,8 +106,8 @@ FommEngine::Keypoints FommEngine::extractKeypoints(const std::vector<float>& inp
         // Run kpSession
         kpSession->Run(
             Ort::RunOptions{nullptr},
-            kpInputNames.data(), &inputTensorValue, 1,
-            kpOutputNames.data(), &kpOutputTensor, 1
+            kpInputNamesPtr.data(), &inputTensorValue, 1,
+            kpOutputNamesPtr.data(), 1
         );
 
         keypoints.kp = kpOutput;
@@ -121,6 +135,10 @@ bool FommEngine::processFrame(void* sourcePixels, void* drivingPixels, void* out
         auto genInputNames = getInputOutputNames(*genSession, true);
         auto genOutputNames = getInputOutputNames(*genSession, false);
 
+        // Convert to const char* const*
+        auto genInputNamesPtr = stringVecToCharPtrVec(genInputNames);
+        auto genOutputNamesPtr = stringVecToCharPtrVec(genOutputNames);
+
         // Prepare input tensors for genSession
         std::vector<int64_t> inputShape = {BATCH_SIZE, CHANNELS, TARGET_SIZE, TARGET_SIZE};
         Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
@@ -136,8 +154,8 @@ bool FommEngine::processFrame(void* sourcePixels, void* drivingPixels, void* out
         // Run genSession
         genSession->Run(
             Ort::RunOptions{nullptr},
-            genInputNames.data(), &inputTensorValue, 1,
-            genOutputNames.data(), &outputTensorValue, 1
+            genInputNamesPtr.data(), &inputTensorValue, 1,
+            genOutputNamesPtr.data(), 1
         );
 
         // Convert output tensor to bitmap
