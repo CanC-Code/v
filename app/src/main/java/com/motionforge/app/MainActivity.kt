@@ -28,15 +28,24 @@ class MainActivity : AppCompatActivity() {
     private var sourceBitmap: Bitmap? = null
     private var drivingVideoUri: Uri? = null
 
-    private val pickVisual = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+    // Dedicated Image Picker
+    private val pickSource = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let {
-            if (it.toString().contains("video")) {
-                drivingVideoUri = it
-                Toast.makeText(this, "Video Selected", Toast.LENGTH_SHORT).show()
-            } else {
-                sourceBitmap = uriToBitmap(it)
+            val bmp = uriToBitmap(it)
+            if (bmp != null) {
+                sourceBitmap = bmp
                 findViewById<ImageView>(R.id.imgSource).setImageBitmap(sourceBitmap)
+            } else {
+                Toast.makeText(this, "Failed to decode image. Please select a valid photo.", Toast.LENGTH_LONG).show()
             }
+        }
+    }
+
+    // Dedicated Video Picker
+    private val pickDriving = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let {
+            drivingVideoUri = it
+            Toast.makeText(this, "Video Selected Successfully", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -45,21 +54,23 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         engine = MotionEngine()
-        initModels()
+        initModelsInBackground()
 
         findViewById<Button>(R.id.btnPickSource).setOnClickListener { 
-            pickVisual.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) 
+            pickSource.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) 
         }
+        
         findViewById<Button>(R.id.btnPickDriving).setOnClickListener { 
-            pickVisual.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) 
+            pickDriving.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) 
         }
         
         findViewById<Button>(R.id.btnProcess).setOnClickListener {
             if (sourceBitmap != null && drivingVideoUri != null) {
-                Toast.makeText(this, "Processing Video...", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Processing Video... Please wait.", Toast.LENGTH_LONG).show()
+                findViewById<Button>(R.id.btnProcess).isEnabled = false // Prevent multi-clicks
                 processVideo(drivingVideoUri!!)
             } else {
-                Toast.makeText(this, "Please select both source and driving media.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Please select both source image and driving video.", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -67,117 +78,121 @@ class MainActivity : AppCompatActivity() {
     private fun processVideo(uri: Uri) {
         CoroutineScope(Dispatchers.IO).launch {
             val retriever = MediaMetadataRetriever()
-            retriever.setDataSource(this@MainActivity, uri)
-            
-            val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-            val durationMs = durationStr?.toLong() ?: 0
-            
-            val outputFile = File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), "MotionForge_${System.currentTimeMillis()}.mp4")
-            
-            val width = 256
-            val height = 256
-            val frameRate = 30
-            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height)
-            format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
-            format.setInteger(MediaFormat.KEY_BIT_RATE, 2000000)
-            format.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
-            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+            try {
+                retriever.setDataSource(this@MainActivity, uri)
+                
+                val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                val durationMs = durationStr?.toLong() ?: 0
+                
+                val outputFile = File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), "MotionForge_${System.currentTimeMillis()}.mp4")
+                
+                val width = 256
+                val height = 256
+                val frameRate = 30
+                val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height)
+                format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
+                format.setInteger(MediaFormat.KEY_BIT_RATE, 2000000)
+                format.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate)
+                format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
 
-            val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            codec.start()
+                val codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                codec.start()
 
-            val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-            var trackIndex = -1
-            var muxerStarted = false
+                val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                var trackIndex = -1
+                var muxerStarted = false
 
-            val frameIntervalUs = 1000000L / frameRate
-            val bufferInfo = MediaCodec.BufferInfo()
-            var timeUs = 0L
-            var inputEOS = false
-            var outputEOS = false
+                val frameIntervalUs = 1000000L / frameRate
+                val bufferInfo = MediaCodec.BufferInfo()
+                var timeUs = 0L
+                var inputEOS = false
+                var outputEOS = false
 
-            while (!outputEOS) {
-                if (!inputEOS) {
-                    val inputBufferIndex = codec.dequeueInputBuffer(10000)
-                    if (inputBufferIndex >= 0) {
-                        // Extract frame exactly at the specified microsecond to avoid stutter
-                        val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+                while (!outputEOS) {
+                    if (!inputEOS) {
+                        val inputBufferIndex = codec.dequeueInputBuffer(10000)
+                        if (inputBufferIndex >= 0) {
+                            val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+                            
+                            if (frame == null || timeUs > durationMs * 1000) {
+                                codec.queueInputBuffer(inputBufferIndex, 0, 0, timeUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                inputEOS = true
+                            } else {
+                                val resizedFrame = Bitmap.createScaledBitmap(frame, 256, 256, true)
+                                val outputBitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
+                                
+                                engine.processFrame(sourceBitmap!!, resizedFrame, outputBitmap)
+                                
+                                withContext(Dispatchers.Main) {
+                                    findViewById<ImageView>(R.id.imgOutput).setImageBitmap(outputBitmap)
+                                }
+
+                                val inputBuffer = codec.getInputBuffer(inputBufferIndex)
+                                inputBuffer?.clear()
+                                
+                                val yuvData = getNV12(width, height, outputBitmap)
+                                inputBuffer?.put(yuvData)
+                                
+                                codec.queueInputBuffer(inputBufferIndex, 0, yuvData.size, timeUs, 0)
+                                timeUs += frameIntervalUs
+                            }
+                        }
+                    }
+
+                    var outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 10000)
+                    while (outputBufferIndex >= 0 || outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                            val newFormat = codec.outputFormat
+                            trackIndex = muxer.addTrack(newFormat)
+                            muxer.start()
+                            muxerStarted = true
+                        } else if (outputBufferIndex >= 0) {
+                            val encodedData = codec.getOutputBuffer(outputBufferIndex)
+                            if (encodedData != null && bufferInfo.size != 0) {
+                                encodedData.position(bufferInfo.offset)
+                                encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                                if (muxerStarted) {
+                                    muxer.writeSampleData(trackIndex, encodedData, bufferInfo)
+                                }
+                            }
+                            if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                                outputEOS = true
+                            }
+                            codec.releaseOutputBuffer(outputBufferIndex, false)
+                        }
                         
-                        if (frame == null || timeUs > durationMs * 1000) {
-                            codec.queueInputBuffer(inputBufferIndex, 0, 0, timeUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                            inputEOS = true
+                        if (!outputEOS) {
+                            outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
                         } else {
-                            val resizedFrame = Bitmap.createScaledBitmap(frame, 256, 256, true)
-                            val outputBitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
-                            
-                            // Native Inference
-                            engine.processFrame(sourceBitmap!!, resizedFrame, outputBitmap)
-                            
-                            // Update UI Tracker
-                            withContext(Dispatchers.Main) {
-                                findViewById<ImageView>(R.id.imgOutput).setImageBitmap(outputBitmap)
-                            }
-
-                            val inputBuffer = codec.getInputBuffer(inputBufferIndex)
-                            inputBuffer?.clear()
-                            
-                            val yuvData = getNV12(width, height, outputBitmap)
-                            inputBuffer?.put(yuvData)
-                            
-                            codec.queueInputBuffer(inputBufferIndex, 0, yuvData.size, timeUs, 0)
-                            timeUs += frameIntervalUs
+                            break
                         }
                     }
                 }
 
-                // Drain output to the Muxer
-                var outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 10000)
-                while (outputBufferIndex >= 0 || outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                        val newFormat = codec.outputFormat
-                        trackIndex = muxer.addTrack(newFormat)
-                        muxer.start()
-                        muxerStarted = true
-                    } else if (outputBufferIndex >= 0) {
-                        val encodedData = codec.getOutputBuffer(outputBufferIndex)
-                        if (encodedData != null && bufferInfo.size != 0) {
-                            encodedData.position(bufferInfo.offset)
-                            encodedData.limit(bufferInfo.offset + bufferInfo.size)
-                            if (muxerStarted) {
-                                muxer.writeSampleData(trackIndex, encodedData, bufferInfo)
-                            }
-                        }
-                        if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                            outputEOS = true
-                        }
-                        codec.releaseOutputBuffer(outputBufferIndex, false)
-                    }
-                    
-                    if (!outputEOS) {
-                        outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
-                    } else {
-                        break
-                    }
+                codec.stop()
+                codec.release()
+                if (muxerStarted) {
+                    muxer.stop()
+                    muxer.release()
                 }
-            }
 
-            // Teardown
-            codec.stop()
-            codec.release()
-            if (muxerStarted) {
-                muxer.stop()
-                muxer.release()
-            }
-            retriever.release()
-
-            withContext(Dispatchers.Main) {
-                Toast.makeText(this@MainActivity, "Saved to Movies: ${outputFile.name}", Toast.LENGTH_LONG).show()
+                withContext(Dispatchers.Main) {
+                    findViewById<Button>(R.id.btnProcess).isEnabled = true
+                    Toast.makeText(this@MainActivity, "Saved to Movies: ${outputFile.name}", Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    findViewById<Button>(R.id.btnProcess).isEnabled = true
+                    Toast.makeText(this@MainActivity, "Error during processing: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                retriever.release()
             }
         }
     }
 
-    // Helper: Converts an ARGB_8888 Bitmap to NV12 byte array for MediaCodec input
     private fun getNV12(inputWidth: Int, inputHeight: Int, bitmap: Bitmap): ByteArray {
         val argb = IntArray(inputWidth * inputHeight)
         bitmap.getPixels(argb, 0, inputWidth, 0, 0, inputWidth, inputHeight)
@@ -206,21 +221,52 @@ class MainActivity : AppCompatActivity() {
         return yuv
     }
 
-    private fun uriToBitmap(uri: Uri): Bitmap {
-        val inputStream = contentResolver.openInputStream(uri)
-        val bitmap = BitmapFactory.decodeStream(inputStream)
-        return Bitmap.createScaledBitmap(bitmap, 256, 256, true)
+    private fun uriToBitmap(uri: Uri): Bitmap? {
+        return try {
+            val inputStream = contentResolver.openInputStream(uri)
+            val bitmap = BitmapFactory.decodeStream(inputStream)
+            inputStream?.close()
+            if (bitmap != null) {
+                Bitmap.createScaledBitmap(bitmap, 256, 256, true)
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
     }
 
-    private fun initModels() {
-        val files = listOf("FOMMDetector.onnx", "FOMMGenerator.onnx", "FOMMDetector.data", "FOMMGenerator.data")
-        files.forEach { name ->
-            val file = File(filesDir, name)
-            if (!file.exists()) {
-                assets.open(name).use { input -> file.outputStream().use { input.copyTo(it) } }
+    private fun initModelsInBackground() {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val files = listOf("FOMMDetector.onnx", "FOMMGenerator.onnx", "FOMMDetector.data", "FOMMGenerator.data")
+                files.forEach { name ->
+                    val file = File(filesDir, name)
+                    if (!file.exists()) {
+                        assets.open(name).use { input -> file.outputStream().use { output -> input.copyTo(output) } }
+                    }
+                }
+                
+                val kpPath = File(filesDir, "FOMMDetector.onnx").absolutePath
+                val genPath = File(filesDir, "FOMMGenerator.onnx").absolutePath
+                val isSuccess = engine.initEngine(kpPath, genPath)
+                
+                withContext(Dispatchers.Main) {
+                    if (isSuccess) {
+                        findViewById<Button>(R.id.btnProcess).isEnabled = true
+                        Toast.makeText(this@MainActivity, "Engine Ready", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this@MainActivity, "Failed to initialize native engine.", Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "Error loading models: ${e.message}", Toast.LENGTH_LONG).show()
+                }
             }
         }
-        engine.initEngine(File(filesDir, "FOMMDetector.onnx").absolutePath, File(filesDir, "FOMMGenerator.onnx").absolutePath)
     }
 
     override fun onDestroy() {
