@@ -1,3 +1,4 @@
+// fomm_engine.h
 #pragma once
 
 #include <onnxruntime_cxx_api.h>
@@ -13,7 +14,7 @@ public:
 
     // Initializes the ONNX sessions. Paths should point to the extracted models on the device.
     bool initialize(const std::string& kpModelPath, const std::string& genModelPath);
-    
+
     // Core pipeline equivalent to JS runFrame() and computeSourceKeypoints()
     bool processFrame(void* sourcePixels, void* drivingPixels, void* outputPixels, int width, int height);
 
@@ -33,7 +34,7 @@ private:
     // Helper functions translating the JS frameToTensor and tensorToImageData logic
     std::vector<float> bitmapToTensor(void* pixels, int width, int height);
     void tensorToBitmap(const float* tensorData, void* outPixels, int width, int height);
-    
+
     // Keypoint extraction
     struct Keypoints {
         std::vector<float> kp;
@@ -42,4 +43,7 @@ private:
         std::vector<int64_t> jac_shape;
     };
     Keypoints extractKeypoints(const std::vector<float>& inputTensor);
+
+    // Helper function to get input/output names from ONNX model
+    std::vector<std::string> getInputOutputNames(Ort::Session& session, bool isInput);
 };
