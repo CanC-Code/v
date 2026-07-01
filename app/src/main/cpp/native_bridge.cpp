@@ -13,7 +13,15 @@ Java_com_motionforge_app_MotionEngine_initEngine(
     jstring kpModelPath,
     jstring genModelPath
 ) {
-    return Java_com_motionforge_app_MotionEngine_initEngine(env, nullptr, kpModelPath, genModelPath);
+    try {
+        std::string kpPath = jstringToString(env, kpModelPath);
+        std::string genPath = jstringToString(env, genModelPath);
+        gFommEngine = new FommEngine();
+        return gFommEngine->initialize(kpPath, genPath);
+    } catch (const std::exception& e) {
+        __android_log_print(ANDROID_LOG_ERROR, "native_bridge", "JNI initialize failed: %s", e.what());
+        return JNI_FALSE;
+    }
 }
 
 // JNI: Process Frame
@@ -27,7 +35,22 @@ Java_com_motionforge_app_MotionEngine_processFrame(
     jint width,
     jint height
 ) {
-    return Java_com_motionforge_app_MotionEngine_processFrame(env, nullptr, sourcePixels, drivingPixels, outputPixels, width, height);
+    if (!gFommEngine) {
+        __android_log_print(ANDROID_LOG_ERROR, "native_bridge", "FommEngine not initialized");
+        return JNI_FALSE;
+    }
+
+    void* srcPtr = byteArrayToVoidPtr(env, sourcePixels);
+    void* drvPtr = byteArrayToVoidPtr(env, drivingPixels);
+    void* outPtr = byteArrayToVoidPtr(env, outputPixels);
+
+    bool result = gFommEngine->processFrame(srcPtr, drvPtr, outPtr, width, height);
+
+    if (sourcePixels) env->ReleaseByteArrayElements(sourcePixels, static_cast<jbyte*>(srcPtr), JNI_ABORT);
+    if (drivingPixels) env->ReleaseByteArrayElements(drivingPixels, static_cast<jbyte*>(drvPtr), JNI_ABORT);
+    if (outputPixels) env->ReleaseByteArrayElements(outputPixels, static_cast<jbyte*>(outPtr), 0);
+
+    return result ? JNI_TRUE : JNI_FALSE;
 }
 
 // JNI: Release Engine
