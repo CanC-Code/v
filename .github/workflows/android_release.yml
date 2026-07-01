@@ -22,11 +22,11 @@ jobs:
           chmod +x ./scripts/*.sh
           ./scripts/setup_env.sh
           ./scripts/fetch_models.sh
-          ./gradlew assembleRelease
+          # Build Debug variant which is auto-signed
+          ./gradlew assembleDebug
         
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: motionforge-release
-          # Updated to use a wildcard to capture the APK whether it is signed or unsigned
-          path: app/build/outputs/apk/release/*.apk
+          name: motionforge-debug
+          path: app/build/outputs/apk/debug/*.apk
