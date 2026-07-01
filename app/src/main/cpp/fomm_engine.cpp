@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <vector>
+#include <utility> // For std::move
 
 #define LOG_TAG "FommEngine"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -25,7 +26,6 @@ std::vector<std::string> FommEngine::getInputOutputNames(Ort::Session& session, 
     std::vector<std::string> names;
     size_t numNodes = isInput ? session.GetInputCount() : session.GetOutputCount();
     for (size_t i = 0; i < numNodes; ++i) {
-        // Directly assign the result to Ort::AllocatedStringPtr
         Ort::AllocatedStringPtr namePtr = isInput ?
             session.GetInputNameAllocated(i, allocator) :
             session.GetOutputNameAllocated(i, allocator);
@@ -101,14 +101,18 @@ FommEngine::Keypoints FommEngine::extractKeypoints(const std::vector<float>& inp
         Ort::Value jacOutputTensor = Ort::Value::CreateTensor<float>(
             memoryInfo, jacOutput.data(), jacOutput.size(), jacShape.data(), jacShape.size());
 
-        // Run kpSession
-        Ort::Value outputTensors[] = {kpOutputTensor, jacOutputTensor};
+        // Run kpSession with output tensors
+        Ort::Value outputTensors[] = {
+            std::move(kpOutputTensor),
+            std::move(jacOutputTensor)
+        };
         kpSession->Run(
             Ort::RunOptions{nullptr},
             kpInputNamesPtr.data(), &inputTensorValue, 1,
             kpOutputNamesPtr.data(), outputTensors, 2
         );
 
+        // Update keypoints with output data
         keypoints.kp = kpOutput;
         keypoints.jac = jacOutput;
         keypoints.kp_shape = kpShape;
