@@ -15,7 +15,6 @@ fi
 
 # 2. Resolve Android NDK
 if [ -z "$ANDROID_NDK_HOME" ]; then
-    # Dynamically find the latest NDK installed within the SDK directory
     if [ -d "$ANDROID_HOME/ndk" ]; then
         NDK_DIR=$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)
         if [ -n "$NDK_DIR" ]; then
@@ -36,9 +35,17 @@ if ! command -v java &> /dev/null; then
     exit 1
 fi
 
-# 4. Validate Gradle (Optional direct wrapper check)
+# 4. Bootstrap Gradle Wrapper if missing
 if [ ! -f "./gradlew" ]; then
-    echo "Warning: gradlew wrapper not found in the current directory. Ensure you are running this from the project root."
+    echo "Warning: gradlew wrapper not found. Bootstrapping via system Gradle..."
+    if command -v gradle &> /dev/null; then
+        gradle wrapper --gradle-version 8.7
+        chmod +x ./gradlew
+        echo "Gradle wrapper successfully generated."
+    else
+        echo "Error: System gradle not found. Cannot generate wrapper."
+        exit 1
+    fi
 fi
 
 echo "Environment successfully configured:"
