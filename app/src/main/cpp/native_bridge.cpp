@@ -6,8 +6,8 @@
 // Expose global engine instance initialized in fomm_engine.cpp
 extern FommEngine* gFommEngine;
 
-// Forward declare the string helper implemented in fomm_engine.cpp
-extern std::string jstringToString(JNIEnv* env, jstring jstr);
+// jstringToString is now declared in fomm_engine.h (included above),
+// no local forward declaration needed.
 
 extern "C"
 JNIEXPORT jboolean JNICALL
