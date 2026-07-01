@@ -1,7 +1,8 @@
 package com.motionforge.app
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.os.Bundle
 import android.widget.*
 import androidx.activity.result.PickVisualMediaRequest
@@ -13,21 +14,18 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var engine: MotionEngine
     private var sourceBitmap: Bitmap? = null
-    private var drivingBitmap: Bitmap? = null
+    private var drivingVideoUri: Uri? = null
 
-    private val pickSource = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        uri?.let { 
-            val bmp = uriToBitmap(it)
-            sourceBitmap = bmp
-            findViewById<ImageView>(R.id.imgSource).setImageBitmap(bmp) 
-        }
-    }
-
-    private val pickDriving = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        uri?.let { 
-            val bmp = uriToBitmap(it)
-            drivingBitmap = bmp
-            findViewById<ImageView>(R.id.imgDriving).setImageBitmap(bmp) 
+    // Hybrid Picker: Accepts Images and Videos
+    private val pickVisual = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let {
+            if (it.toString().contains("video")) {
+                drivingVideoUri = it
+                Toast.makeText(this, "Video Selected", Toast.LENGTH_SHORT).show()
+            } else {
+                sourceBitmap = uriToBitmap(it)
+                findViewById<ImageView>(R.id.imgSource).setImageBitmap(sourceBitmap)
+            }
         }
     }
 
@@ -38,28 +36,51 @@ class MainActivity : AppCompatActivity() {
         engine = MotionEngine()
         initModels()
 
-        findViewById<Button>(R.id.btnPickSource).setOnClickListener { pickSource.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
-        findViewById<Button>(R.id.btnPickDriving).setOnClickListener { pickDriving.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+        findViewById<Button>(R.id.btnPickSource).setOnClickListener { 
+            pickVisual.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) 
+        }
+        findViewById<Button>(R.id.btnPickDriving).setOnClickListener { 
+            pickVisual.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) 
+        }
         
         findViewById<Button>(R.id.btnProcess).setOnClickListener {
-            val src = sourceBitmap
-            val drv = drivingBitmap
-            if (src != null && drv != null) {
-                val output = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
-                engine.processFrame(src, drv, output)
-                findViewById<ImageView>(R.id.imgOutput).setImageBitmap(output)
+            if (sourceBitmap != null && drivingVideoUri != null) {
+                processVideo(drivingVideoUri!!)
             }
         }
     }
 
-    private fun uriToBitmap(uri: android.net.Uri): Bitmap {
+    private fun processVideo(uri: Uri) {
+        val retriever = MediaMetadataRetriever()
+        retriever.setDataSource(this, uri)
+        
+        // Loop through video duration (e.g., 30fps)
+        val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0
+        val frameInterval = 33333L // approx 30fps in microseconds
+        
+        for (timeUs in 0 until durationMs * 1000 step frameInterval) {
+            val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            if (frame != null) {
+                val resizedFrame = Bitmap.createScaledBitmap(frame, 256, 256, true)
+                val output = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
+                
+                // Native Inference
+                engine.processFrame(sourceBitmap!!, resizedFrame, output)
+                
+                // TODO: Feed 'output' into MediaCodec for encoding
+            }
+        }
+        retriever.release()
+    }
+
+    private fun uriToBitmap(uri: Uri): Bitmap {
         val inputStream = contentResolver.openInputStream(uri)
-        val bitmap = BitmapFactory.decodeStream(inputStream)
-        // CRITICAL: Resize to model requirement (256x256)
+        val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
         return Bitmap.createScaledBitmap(bitmap, 256, 256, true)
     }
 
     private fun initModels() {
+        // [Existing asset logic stays the same]
         val files = listOf("FOMMDetector.onnx", "FOMMGenerator.onnx")
         files.forEach { name ->
             val file = File(filesDir, name)
