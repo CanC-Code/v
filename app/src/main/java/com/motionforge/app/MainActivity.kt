@@ -101,14 +101,14 @@ class MainActivity : AppCompatActivity() {
         engine = MotionEngine()
         initModelsInBackground()
 
-        findViewById<Button>(R.id.btnPickSource).setOnClickListener { 
-            pickSource.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) 
+        findViewById<Button>(R.id.btnPickSource).setOnClickListener {
+            pickSource.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
         }
-        
-        findViewById<Button>(R.id.btnPickDriving).setOnClickListener { 
-            pickDriving.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) 
+
+        findViewById<Button>(R.id.btnPickDriving).setOnClickListener {
+            pickDriving.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
         }
-        
+
         findViewById<Button>(R.id.btnProcess).setOnClickListener {
             if (sourceBitmap != null && drivingVideoUri != null) {
                 prepareForProcessing()
@@ -132,7 +132,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnExport).isEnabled = false
         findViewById<Button>(R.id.btnPickSource).isEnabled = false
         findViewById<Button>(R.id.btnPickDriving).isEnabled = false
-        
+
         findViewById<ProgressBar>(R.id.progressBar).visibility = View.VISIBLE
         findViewById<ProgressBar>(R.id.progressBar).progress = 0
         findViewById<TextView>(R.id.txtStatus).text = "Status: Initializing Encoder..."
@@ -143,17 +143,17 @@ class MainActivity : AppCompatActivity() {
             val retriever = MediaMetadataRetriever()
             try {
                 retriever.setDataSource(this@MainActivity, uri)
-                
+
                 val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                 val durationMs = durationStr?.toLong() ?: 0
-                
-                // Write to isolated app cache directory instead of public external storage
+
                 tempOutputFile = File(cacheDir, "MotionForge_TempOutput.mp4")
                 if (tempOutputFile!!.exists()) { tempOutputFile!!.delete() }
-                
+
                 val width = 256
                 val height = 256
                 val frameRate = 30
+
                 val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height)
                 format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
                 format.setInteger(MediaFormat.KEY_BIT_RATE, 2000000)
@@ -168,74 +168,60 @@ class MainActivity : AppCompatActivity() {
                 var trackIndex = -1
                 var muxerStarted = false
 
-                val frameIntervalUs = 1000000L / frameRate
                 val bufferInfo = MediaCodec.BufferInfo()
-                var timeUs = 0L
-                var inputEOS = false
-                var outputEOS = false
 
-                while (!outputEOS) {
-                    if (!inputEOS) {
-                        val inputBufferIndex = codec.dequeueInputBuffer(10000)
-                        if (inputBufferIndex >= 0) {
-                            val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
-                            
-                            if (frame == null || timeUs > durationMs * 1000) {
-                                codec.queueInputBuffer(inputBufferIndex, 0, 0, timeUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                                inputEOS = true
-                            } else {
-                                val resizedFrame = Bitmap.createScaledBitmap(frame, 256, 256, true)
-                                val outputBitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
-                                
-                                engine.processFrame(sourceBitmap!!, resizedFrame, outputBitmap)
-                                
-                                // GUI Update: Show live processing and progress calculations
-                                val progressPercent = ((timeUs.toFloat() / (durationMs * 1000f)) * 100).toInt().coerceIn(0, 100)
-                                withContext(Dispatchers.Main) {
-                                    findViewById<ImageView>(R.id.imgOutput).setImageBitmap(outputBitmap)
-                                    findViewById<ProgressBar>(R.id.progressBar).progress = progressPercent
-                                    findViewById<TextView>(R.id.txtStatus).text = "Status: Processing Frame... $progressPercent%"
-                                }
+                // --- Phase 1: Feed all frames using source video's actual presentation timestamps ---
+                // Step 33ms per iteration (~30fps). Using the source timestamp directly ensures the
+                // output container duration maps 1:1 to the input video — no synthetic clock drift.
+                for (timeMs in 0 until durationMs step 33) {
+                    val timeUs = timeMs * 1000L
 
-                                val inputBuffer = codec.getInputBuffer(inputBufferIndex)
-                                inputBuffer?.clear()
-                                
-                                val yuvData = getNV12(width, height, outputBitmap)
-                                inputBuffer?.put(yuvData)
-                                
-                                codec.queueInputBuffer(inputBufferIndex, 0, yuvData.size, timeUs, 0)
-                                timeUs += frameIntervalUs
-                            }
-                        }
+                    val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+                        ?: continue
+
+                    val resizedFrame = Bitmap.createScaledBitmap(frame, width, height, true)
+                    val outputBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+
+                    engine.processFrame(sourceBitmap!!, resizedFrame, outputBitmap)
+
+                    // Live preview + progress update
+                    val progressPercent = ((timeMs.toFloat() / durationMs.toFloat()) * 100).toInt().coerceIn(0, 100)
+                    withContext(Dispatchers.Main) {
+                        findViewById<ImageView>(R.id.imgOutput).setImageBitmap(outputBitmap)
+                        findViewById<ProgressBar>(R.id.progressBar).progress = progressPercent
+                        findViewById<TextView>(R.id.txtStatus).text = "Status: Processing Frame... $progressPercent%"
                     }
 
-                    var outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 10000)
-                    while (outputBufferIndex >= 0 || outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                        if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                            val newFormat = codec.outputFormat
-                            trackIndex = muxer.addTrack(newFormat)
-                            muxer.start()
-                            muxerStarted = true
-                        } else if (outputBufferIndex >= 0) {
-                            val encodedData = codec.getOutputBuffer(outputBufferIndex)
-                            if (encodedData != null && bufferInfo.size != 0) {
-                                encodedData.position(bufferInfo.offset)
-                                encodedData.limit(bufferInfo.offset + bufferInfo.size)
-                                if (muxerStarted) {
-                                    muxer.writeSampleData(trackIndex, encodedData, bufferInfo)
-                                }
-                            }
-                            if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                                outputEOS = true
-                            }
-                            codec.releaseOutputBuffer(outputBufferIndex, false)
-                        }
-                        
-                        if (!outputEOS) {
-                            outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
-                        } else {
-                            break
-                        }
+                    // Encode frame
+                    val inputBufferIndex = codec.dequeueInputBuffer(10000)
+                    if (inputBufferIndex >= 0) {
+                        val inputBuffer = codec.getInputBuffer(inputBufferIndex)
+                        inputBuffer?.clear()
+                        val yuvData = getNV12(width, height, outputBitmap)
+                        inputBuffer?.put(yuvData)
+                        codec.queueInputBuffer(inputBufferIndex, 0, yuvData.size, timeUs, 0)
+                    }
+
+                    // Drain any available output buffers without blocking, to keep encoder from stalling
+                    drainEncoder(codec, bufferInfo, muxer, muxerStarted, trackIndex).let { result ->
+                        trackIndex = result.first
+                        muxerStarted = result.second
+                    }
+                }
+
+                // --- Phase 2: Signal end-of-stream and drain remaining encoded output ---
+                val eosIndex = codec.dequeueInputBuffer(10000)
+                if (eosIndex >= 0) {
+                    codec.queueInputBuffer(eosIndex, 0, 0, durationMs * 1000L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                }
+
+                var outputEOS = false
+                while (!outputEOS) {
+                    val result = drainEncoder(codec, bufferInfo, muxer, muxerStarted, trackIndex)
+                    trackIndex = result.first
+                    muxerStarted = result.second
+                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        outputEOS = true
                     }
                 }
 
@@ -247,12 +233,14 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 withContext(Dispatchers.Main) {
+                    findViewById<ProgressBar>(R.id.progressBar).progress = 100
                     findViewById<Button>(R.id.btnProcess).isEnabled = true
                     findViewById<Button>(R.id.btnPickSource).isEnabled = true
                     findViewById<Button>(R.id.btnPickDriving).isEnabled = true
                     findViewById<Button>(R.id.btnExport).isEnabled = true
                     findViewById<TextView>(R.id.txtStatus).text = "Status: Processing Complete!"
                 }
+
             } catch (e: Exception) {
                 e.printStackTrace()
                 withContext(Dispatchers.Main) {
@@ -267,24 +255,70 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Drains all currently available output buffers from the encoder and writes them to the muxer.
+     * Returns the (possibly updated) trackIndex and muxerStarted state as a Pair.
+     * Uses timeout=0 so it never blocks — safe to call inside the feed loop.
+     */
+    private fun drainEncoder(
+        codec: MediaCodec,
+        bufferInfo: MediaCodec.BufferInfo,
+        muxer: MediaMuxer,
+        muxerStarted: Boolean,
+        trackIndex: Int
+    ): Pair<Int, Boolean> {
+        var currentTrackIndex = trackIndex
+        var currentMuxerStarted = muxerStarted
+
+        var outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+        while (outputBufferIndex >= 0 || outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+            if (outputBufferIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                val newFormat = codec.outputFormat
+                currentTrackIndex = muxer.addTrack(newFormat)
+                muxer.start()
+                currentMuxerStarted = true
+            } else if (outputBufferIndex >= 0) {
+                val encodedData = codec.getOutputBuffer(outputBufferIndex)
+                if (encodedData != null && bufferInfo.size != 0) {
+                    encodedData.position(bufferInfo.offset)
+                    encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                    if (currentMuxerStarted) {
+                        muxer.writeSampleData(currentTrackIndex, encodedData, bufferInfo)
+                    }
+                }
+                codec.releaseOutputBuffer(outputBufferIndex, false)
+            }
+            outputBufferIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
+        }
+
+        return Pair(currentTrackIndex, currentMuxerStarted)
+    }
+
+    /**
+     * Converts an ARGB_8888 Bitmap to NV12 (YUV 4:2:0 semi-planar) byte layout.
+     *
+     * Memory layout: [Y plane: width*height bytes] [UV interleaved: width*height/2 bytes]
+     * This is what COLOR_FormatYUV420Flexible maps to on virtually all Android hardware encoders.
+     * U and V chroma samples are properly subsampled (one per 2x2 luma block) and interleaved U,V.
+     */
     private fun getNV12(inputWidth: Int, inputHeight: Int, bitmap: Bitmap): ByteArray {
         val argb = IntArray(inputWidth * inputHeight)
         bitmap.getPixels(argb, 0, inputWidth, 0, 0, inputWidth, inputHeight)
         val yuv = ByteArray(inputWidth * inputHeight * 3 / 2)
         var yIndex = 0
         var uvIndex = inputWidth * inputHeight
-        
+
         for (j in 0 until inputHeight) {
             for (i in 0 until inputWidth) {
                 val pixel = argb[j * inputWidth + i]
                 val r = (pixel shr 16) and 0xff
                 val g = (pixel shr 8) and 0xff
                 val b = pixel and 0xff
-                
+
                 val y = ((66 * r + 129 * g + 25 * b + 128) shr 8) + 16
                 val u = ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
                 val v = ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
-                
+
                 yuv[yIndex++] = y.coerceIn(0, 255).toByte()
                 if (j % 2 == 0 && i % 2 == 0) {
                     yuv[uvIndex++] = u.coerceIn(0, 255).toByte()
@@ -321,11 +355,11 @@ class MainActivity : AppCompatActivity() {
                         assets.open(name).use { input -> file.outputStream().use { output -> input.copyTo(output) } }
                     }
                 }
-                
+
                 val kpPath = File(filesDir, "FOMMDetector.onnx").absolutePath
                 val genPath = File(filesDir, "FOMMGenerator.onnx").absolutePath
                 val isSuccess = engine.initEngine(kpPath, genPath)
-                
+
                 withContext(Dispatchers.Main) {
                     if (isSuccess) {
                         findViewById<Button>(R.id.btnProcess).isEnabled = true
