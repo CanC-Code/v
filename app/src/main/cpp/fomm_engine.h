@@ -1,11 +1,16 @@
 // fomm_engine.h
 #pragma once
 
+#include <jni.h>
 #include <onnxruntime_cxx_api.h>
 #include <vector>
 #include <string>
 #include <memory>
 #include <android/bitmap.h>
+
+// JNI string conversion helper, implemented in fomm_engine.cpp,
+// used by native_bridge.cpp
+std::string jstringToString(JNIEnv* env, jstring jstr);
 
 class FommEngine {
 public:
