@@ -28,7 +28,7 @@ class MainActivity : AppCompatActivity() {
     private var sourceBitmap: Bitmap? = null
     private var drivingVideoUri: Uri? = null
 
-    // Dedicated Image Picker
+    // Dedicated Image Picker ensures only images are sent to the decoder
     private val pickSource = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let {
             val bmp = uriToBitmap(it)
@@ -41,7 +41,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Dedicated Video Picker
+    // Dedicated Video Picker isolates the video URI
     private val pickDriving = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let {
             drivingVideoUri = it
@@ -67,7 +67,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnProcess).setOnClickListener {
             if (sourceBitmap != null && drivingVideoUri != null) {
                 Toast.makeText(this, "Processing Video... Please wait.", Toast.LENGTH_LONG).show()
-                findViewById<Button>(R.id.btnProcess).isEnabled = false // Prevent multi-clicks
+                findViewById<Button>(R.id.btnProcess).isEnabled = false
                 processVideo(drivingVideoUri!!)
             } else {
                 Toast.makeText(this, "Please select both source image and driving video.", Toast.LENGTH_SHORT).show()
