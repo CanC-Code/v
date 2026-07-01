@@ -44,7 +44,6 @@ android {
     }
     
     composeOptions {
-        // FIX: Updated from 1.5.1 to 1.5.11 to support Kotlin 1.9.23
         kotlinCompilerExtensionVersion '1.5.11'
     }
     
@@ -66,4 +65,7 @@ dependencies {
     implementation 'androidx.compose.ui:ui-graphics'
     implementation 'androidx.compose.ui:ui-tooling-preview'
     implementation 'androidx.compose.material3:material3'
+    
+    // Image Loading
+    implementation 'io.coil-kt:coil-compose:2.6.0'
 }
