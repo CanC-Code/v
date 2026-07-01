@@ -3,6 +3,11 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+// 1. Define a separate configuration to extract the ONNX AAR contents
+configurations {
+    onnxExtraction
+}
+
 android {
     namespace 'com.example.motionforge'
     compileSdk 34
@@ -19,9 +24,16 @@ android {
             useSupportLibrary true
         }
         
-        // Target specific ABIs for ONNX runtime optimization
         ndk {
             abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+        }
+        
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17"
+                // 2. Pass the extracted build directory path directly to CMake
+                arguments "-DONNX_NATIVE_DIR=${layout.buildDirectory.get().asFile}/onnx_native"
+            }
         }
     }
 
@@ -46,7 +58,7 @@ android {
     
     buildFeatures {
         compose true
-        prefab true // Critical: Allows linking against native AAR dependencies like ONNX
+        // Prefab removed: We are handling native extraction manually for compatibility
     }
     
     composeOptions {
@@ -67,6 +79,23 @@ android {
     }
 }
 
+// 3. Task to extract the C++ headers and JNI libraries from the AAR
+tasks.register('extractOnnxNative', Copy) {
+    from {
+        configurations.onnxExtraction.collect { zipTree(it) }
+    }
+    into "${layout.buildDirectory.get().asFile}/onnx_native"
+    include "headers/**"
+    include "jni/**"
+}
+
+// 4. Ensure extraction happens before any CMake tasks attempt to run
+tasks.whenTaskAdded { task ->
+    if (task.name.startsWith("configureCMake") || task.name.startsWith("buildCMake") || task.name.startsWith("generateJsonModel")) {
+        task.dependsOn "extractOnnxNative"
+    }
+}
+
 dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
@@ -80,6 +109,8 @@ dependencies {
     
     implementation 'io.coil-kt:coil-compose:2.6.0'
     
-    // ONNX Runtime Android dependency providing Prefab C++ headers
+    // Standard implementation for the Java/Kotlin runtime bindings
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.17.1'
+    // Source mapping for the C++ extraction task defined above
+    onnxExtraction 'com.microsoft.onnxruntime:onnxruntime-android:1.17.1@aar'
 }
