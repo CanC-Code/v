@@ -3,6 +3,10 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+configurations {
+    onnxExtraction
+}
+
 android {
     namespace 'com.example.motionforge'
     compileSdk 34
@@ -18,6 +22,17 @@ android {
         vectorDrawables {
             useSupportLibrary true
         }
+        
+        ndk {
+            abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+        }
+        
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17 -fexceptions -frtti"
+                arguments "-DONNX_NATIVE_DIR=${layout.buildDirectory.get().asFile}/onnx_native"
+            }
+        }
     }
 
     buildTypes {
@@ -29,24 +44,38 @@ android {
             minifyEnabled false
         }
     }
-
+    
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-
+    
     kotlinOptions {
         jvmTarget = '17'
     }
-
+    
     buildFeatures {
         compose true
     }
-
+    
     composeOptions {
         kotlinCompilerExtensionVersion '1.5.11'
     }
+    
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
 
+    // CRITICAL FIX: Explicitly package the extracted ONNX libraries into the APK
+    sourceSets {
+        main {
+            jniLibs.srcDirs += ["${layout.buildDirectory.get().asFile}/onnx_native/jni"]
+        }
+    }
+    
     packaging {
         resources {
             excludes += '/META-INF/{AL2.0,LGPL2.1}'
@@ -54,19 +83,33 @@ android {
     }
 }
 
+tasks.register('extractOnnxNative', Copy) {
+    from(provider { configurations.onnxExtraction.collect { zipTree(it) } })
+    into "${layout.buildDirectory.get().asFile}/onnx_native"
+    include "headers/**"
+    include "jni/**"
+}
+
+// Ensure extraction happens before both CMake configuration AND AGP library packaging
+tasks.whenTaskAdded { task ->
+    if (task.name.startsWith("configureCMake") || task.name.startsWith("buildCMake") || task.name.startsWith("mergeDebugJniLibFolders") || task.name.startsWith("mergeReleaseJniLibFolders")) {
+        task.dependsOn "extractOnnxNative"
+    }
+}
+
 dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
     implementation 'androidx.activity:activity-compose:1.8.2'
-
-    // Compose BOM mapping
+    
     implementation platform('androidx.compose:compose-bom:2023.08.00')
     implementation 'androidx.compose.ui:ui'
     implementation 'androidx.compose.ui:ui-graphics'
     implementation 'androidx.compose.ui:ui-tooling-preview'
     implementation 'androidx.compose.material3:material3'
-
-    // MainActivity.kt uses coil.compose.rememberAsyncImagePainter -- this was
-    // referenced but never declared, which would fail to compile.
+    
     implementation 'io.coil-kt:coil-compose:2.6.0'
+    
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.17.1'
+    onnxExtraction 'com.microsoft.onnxruntime:onnxruntime-android:1.17.1@aar'
 }
