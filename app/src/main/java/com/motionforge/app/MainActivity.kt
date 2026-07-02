@@ -2,8 +2,13 @@ package com.example.motionforge
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.widget.VideoView
+import android.media.MediaMetadataRetriever
+import android.graphics.Bitmap
+import android.graphics.ImageDecoder
+import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -26,6 +31,9 @@ import coil.compose.rememberAsyncImagePainter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.jcodec.api.android.AndroidSequenceEncoder
+import org.jcodec.common.io.NIOUtils
+import org.jcodec.common.model.Rational
 import java.io.File
 import java.io.FileOutputStream
 
@@ -162,7 +170,7 @@ fun MotionForgeApp() {
                 onClick = {
                     if (sourceImageUri != null && drivingVideoUri != null) {
                         isGenerating = true
-                        statusMessage = "Initializing Models & Processing Pipeline..."
+                        statusMessage = "Synthesizing Motion Transfer..."
                         resultVideoUri = null
                         coroutineScope.launch {
                             val result = executeMotionPipeline(context, sourceImageUri!!, drivingVideoUri!!)
@@ -179,7 +187,7 @@ fun MotionForgeApp() {
                 enabled = sourceImageUri != null && drivingVideoUri != null && !isGenerating,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(if (isGenerating) "Processing..." else "Generate Animation")
+                Text(if (isGenerating) "Processing Sequence..." else "Generate Animation")
             }
 
             if (statusMessage.isNotEmpty()) {
@@ -252,42 +260,72 @@ fun getAssetPath(context: Context, baseName: String): String {
 
 private suspend fun executeMotionPipeline(context: Context, imgUri: Uri, vidUri: Uri): Uri? = withContext(Dispatchers.IO) {
     try {
-        android.util.Log.d("FommEngine", "Starting pipeline initialization...")
         val engine = FommEngineWrapper()
-        
         val kpModelPath = getAssetPath(context, "FOMMDetector")
         val genModelPath = getAssetPath(context, "FOMMGenerator")
 
-        val isInitialized = engine.initialize(kpModelPath, genModelPath)
-        if (!isInitialized) {
+        if (!engine.initialize(kpModelPath, genModelPath)) {
             android.util.Log.e("FommEngine", "Failed to initialize ONNX Sessions.")
             return@withContext null
         }
 
-        val sourceFile = File(context.cacheDir, "input_source.jpg")
-        context.contentResolver.openInputStream(imgUri)?.use { input ->
-            FileOutputStream(sourceFile).use { input.copyTo(it) }
+        // 1. Decode & Guarantee Software Bitmap representation for JNI Bridge
+        var sourceBitmap: Bitmap?
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val source = ImageDecoder.createSource(context.contentResolver, imgUri)
+            sourceBitmap = ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                decoder.setTargetSize(256, 256)
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+        } else {
+            val bmp = MediaStore.Images.Media.getBitmap(context.contentResolver, imgUri)
+            sourceBitmap = Bitmap.createScaledBitmap(bmp, 256, 256, true)
         }
-
-        val drivingFile = File(context.cacheDir, "input_driving.mp4")
-        context.contentResolver.openInputStream(vidUri)?.use { input ->
-            FileOutputStream(drivingFile).use { input.copyTo(it) }
-        }
+        val sourceSoftwareBitmap = sourceBitmap!!.copy(Bitmap.Config.ARGB_8888, false)
 
         val outputFile = File(context.cacheDir, "output_generation.mp4")
+        if (outputFile.exists()) outputFile.delete()
+        
+        // 2. Prepare JCodec Pure Java Multiplexer
+        val outChannel = NIOUtils.writableFileChannel(outputFile.absolutePath)
+        val encoder = AndroidSequenceEncoder(outChannel, Rational.R(15, 1))
 
-        val success = engine.processVideo(
-            sourceImagePath = sourceFile.absolutePath,
-            drivingVideoPath = drivingFile.absolutePath,
-            outputPath = outputFile.absolutePath
-        )
-
-        if (success && outputFile.exists()) {
-            Uri.fromFile(outputFile)
-        } else {
-            android.util.Log.e("FommEngine", "Native engine processVideo returned false.")
-            null
+        // 3. Extrapolate Video Frames natively
+        val retriever = MediaMetadataRetriever()
+        context.contentResolver.openFileDescriptor(vidUri, "r")?.fileDescriptor?.let {
+            retriever.setDataSource(it)
         }
+        
+        val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+        val durationMs = durationStr?.toLong() ?: 0L
+        val fps = 15
+        val frameIntervalUs = 1000000L / fps
+        val totalFrames = ((durationMs * 1000L) / frameIntervalUs).toInt()
+        
+        val outputBitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
+        
+        for (i in 0 until totalFrames) {
+            val timeUs = i * frameIntervalUs
+            val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+            
+            if (frame != null) {
+                val scaledFrame = Bitmap.createScaledBitmap(frame, 256, 256, true)
+                val swFrame = scaledFrame.copy(Bitmap.Config.ARGB_8888, false)
+                
+                // 4. Inject specific sequence states into C++ ONNX graph and await rendered response
+                val success = engine.processFrame(sourceSoftwareBitmap, swFrame, outputBitmap, i == 0)
+                if (success) {
+                    encoder.encodeImage(outputBitmap)
+                }
+            }
+        }
+        
+        encoder.finish()
+        NIOUtils.closeQuietly(outChannel)
+        retriever.release()
+
+        if (outputFile.exists()) Uri.fromFile(outputFile) else null
+
     } catch (e: Exception) {
         android.util.Log.e("FommEngine", "Exception during pipeline execution", e)
         null
