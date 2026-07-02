@@ -114,7 +114,6 @@ std::vector<float> FommEngine::generateFrame(const std::vector<float>& sourceFra
             std::copy(sourceFrame.begin(), sourceFrame.end(), inputBuffers[i].begin());
         } 
         else {
-            // Strict heuristics fallback for alternative export names
             if (name.find("initial") != std::string::npos && dims.size() == 3) {
                  std::copy(kpDrivingInitial.begin(), kpDrivingInitial.end(), inputBuffers[i].begin());
             } else if (name.find("driving") != std::string::npos && dims.size() == 3) {
@@ -193,6 +192,7 @@ bool FommEngine::processFrame(JNIEnv* env, jobject sourceBitmap, jobject driving
     AndroidBitmap_getInfo(env, outputBitmap, &info);
     AndroidBitmap_lockPixels(env, outputBitmap, &pixels);
     uint32_t* out = (uint32_t*)pixels;
+    
     for (int i = 0; i < info.width * info.height; ++i) {
         float r = std::clamp(outputFrame[i], 0.0f, 1.0f) * 255.0f;
         float g = std::clamp(outputFrame[info.width * info.height + i], 0.0f, 1.0f) * 255.0f;
