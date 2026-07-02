@@ -7,7 +7,7 @@ extern FommEngine* gFommEngine;
 
 extern "C"
 JNIEXPORT jboolean JNICALL
-Java_com_motionforge_app_FommEngineWrapper_initialize(JNIEnv* env, jobject /* this */, jstring kpModelPath, jstring genModelPath) {
+Java_com_example_motionforge_FommEngineWrapper_initialize(JNIEnv* env, jobject /* this */, jstring kpModelPath, jstring genModelPath) {
     try {
         if (!kpModelPath || !genModelPath) return JNI_FALSE;
 
@@ -28,7 +28,7 @@ Java_com_motionforge_app_FommEngineWrapper_initialize(JNIEnv* env, jobject /* th
 
 extern "C"
 JNIEXPORT jboolean JNICALL
-Java_com_motionforge_app_FommEngineWrapper_processVideo(JNIEnv* env, jobject /* this */, jstring imagePath, jstring videoPath, jstring outputPath) {
+Java_com_example_motionforge_FommEngineWrapper_processVideo(JNIEnv* env, jobject /* this */, jstring imagePath, jstring videoPath, jstring outputPath) {
     if (!gFommEngine) {
         __android_log_print(ANDROID_LOG_ERROR, "native_bridge", "FommEngine not initialized");
         return JNI_FALSE;
