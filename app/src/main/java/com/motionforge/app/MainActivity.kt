@@ -1,9 +1,6 @@
 package com.example.motionforge
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.widget.VideoView
@@ -26,17 +23,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import coil.compose.rememberAsyncImagePainter
-import com.motionforge.app.FommEngineWrapper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import java.nio.ByteBuffer
-
-private const val FRAME_SIZE = 256
-private const val OUTPUT_FRAME_RATE = 12
-private const val MAX_FRAMES = 300 // ~25s at 12fps; keeps runaway durations from hanging the phone
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -171,17 +162,15 @@ fun MotionForgeApp() {
                 onClick = {
                     if (sourceImageUri != null && drivingVideoUri != null) {
                         isGenerating = true
-                        statusMessage = "Processing Native Motion Transference..."
+                        statusMessage = "Initializing Models & Processing Pipeline..."
                         resultVideoUri = null
                         coroutineScope.launch {
-                            val result = executeMotionPipeline(context, sourceImageUri!!, drivingVideoUri!!) { msg ->
-                                statusMessage = msg
-                            }
+                            val result = executeMotionPipeline(context, sourceImageUri!!, drivingVideoUri!!)
                             if (result != null) {
                                 resultVideoUri = result
                                 statusMessage = "Generation Successful!"
                             } else {
-                                statusMessage = "Pipeline Inference Failed. Check Logcat (tag: FommEngine)."
+                                statusMessage = "Pipeline Inference Failed. Check Logcat."
                             }
                             isGenerating = false
                         }
@@ -190,7 +179,7 @@ fun MotionForgeApp() {
                 enabled = sourceImageUri != null && drivingVideoUri != null && !isGenerating,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(if (isGenerating) "Processing Pipeline..." else "Generate Animation")
+                Text(if (isGenerating) "Processing..." else "Generate Animation")
             }
 
             if (statusMessage.isNotEmpty()) {
@@ -239,20 +228,6 @@ fun VideoPreview(uri: Uri) {
     )
 }
 
-/**
- * Copies a model's .onnx graph AND its paired .data external-weights file (if present)
- * from assets into internal storage. ONNX Runtime resolves external data relative to
- * the .onnx file's directory using the filename baked into the graph at export time,
- * so both files must land side-by-side with matching names, or session construction
- * fails (often surfacing later as "Invalid fd" once inference tries to touch the
- * weights). baseName should be the filename WITHOUT extension, e.g. "FOMMDetector".
- *
- * IMPORTANT: scripts/fetch_models.sh copies files matched by `-name "*FOMMDetector.onnx"`,
- * which preserves whatever prefix existed inside the upstream zip. If the actual file in
- * app/src/main/assets/ isn't exactly "FOMMDetector.onnx" / "FOMMDetector.data", this will
- * throw FileNotFoundException on the .onnx open. Run `ls app/src/main/assets/` to confirm
- * the real filenames before assuming this function is the problem.
- */
 fun getAssetPath(context: Context, baseName: String): String {
     val onnxFile = File(context.filesDir, "$baseName.onnx")
     if (!onnxFile.exists()) {
@@ -261,122 +236,60 @@ fun getAssetPath(context: Context, baseName: String): String {
         }
     }
 
-    val dataAssetName = "$baseName.data"
-    val hasDataAsset = try {
-        context.assets.open(dataAssetName).close()
-        true
-    } catch (e: java.io.FileNotFoundException) {
-        false
-    }
-
-    if (hasDataAsset) {
-        val dataFile = File(context.filesDir, dataAssetName)
+    val dataFile = File(context.filesDir, "$baseName.data")
+    try {
         if (!dataFile.exists()) {
-            context.assets.open(dataAssetName).use { input ->
+            context.assets.open("$baseName.data").use { input ->
                 dataFile.outputStream().use { input.copyTo(it) }
             }
         }
+    } catch (e: Exception) {
+        // Safe fallthrough if the model does not utilize a detached external .data weight file
     }
-
+    
     return onnxFile.absolutePath
 }
 
-private fun bitmapToRgbaBytes(bitmap: Bitmap): ByteArray {
-    val safeBitmap = if (bitmap.config != Bitmap.Config.ARGB_8888) {
-        bitmap.copy(Bitmap.Config.ARGB_8888, false)
-    } else {
-        bitmap
-    }
-    val buffer = ByteBuffer.allocate(safeBitmap.byteCount)
-    safeBitmap.copyPixelsToBuffer(buffer)
-    return buffer.array()
-}
-
-/**
- * Decodes the source image and driving video, runs the native engine per-frame, and
- * encodes the results into an mp4. No such video-level pipeline previously existed in
- * either the Kotlin or C++ layers -- FommEngineWrapper only ever exposed single-frame
- * processFrame(), so this orchestration has to live here.
- */
-private suspend fun executeMotionPipeline(
-    context: Context,
-    imgUri: Uri,
-    vidUri: Uri,
-    onStatus: (String) -> Unit
-): Uri? = withContext(Dispatchers.IO) {
-    var retriever: MediaMetadataRetriever? = null
-    var encoder: VideoEncoder? = null
+private suspend fun executeMotionPipeline(context: Context, imgUri: Uri, vidUri: Uri): Uri? = withContext(Dispatchers.IO) {
     try {
         android.util.Log.d("FommEngine", "Starting pipeline initialization...")
         val engine = FommEngineWrapper()
-
+        
         val kpModelPath = getAssetPath(context, "FOMMDetector")
         val genModelPath = getAssetPath(context, "FOMMGenerator")
 
-        if (!engine.initialize(kpModelPath, genModelPath)) {
-            android.util.Log.e("FommEngine", "Failed to initialize ONNX sessions.")
+        val isInitialized = engine.initialize(kpModelPath, genModelPath)
+        if (!isInitialized) {
+            android.util.Log.e("FommEngine", "Failed to initialize ONNX Sessions.")
             return@withContext null
         }
 
-        // Source image
-        val sourceOptions = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
-        val decodedSource = context.contentResolver.openInputStream(imgUri)?.use {
-            BitmapFactory.decodeStream(it, null, sourceOptions)
-        } ?: return@withContext null
-        val scaledSource = Bitmap.createScaledBitmap(decodedSource, FRAME_SIZE, FRAME_SIZE, true)
-        val sourceBytes = bitmapToRgbaBytes(scaledSource)
+        val sourceFile = File(context.cacheDir, "input_source.jpg")
+        context.contentResolver.openInputStream(imgUri)?.use { input ->
+            FileOutputStream(sourceFile).use { input.copyTo(it) }
+        }
 
-        // Driving video needs a local file path for MediaMetadataRetriever
         val drivingFile = File(context.cacheDir, "input_driving.mp4")
         context.contentResolver.openInputStream(vidUri)?.use { input ->
             FileOutputStream(drivingFile).use { input.copyTo(it) }
         }
 
-        retriever = MediaMetadataRetriever().apply { setDataSource(drivingFile.absolutePath) }
-        val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-            ?.toLongOrNull() ?: 0L
-        if (durationMs <= 0L) {
-            android.util.Log.e("FommEngine", "Could not read driving video duration.")
-            return@withContext null
-        }
-        val frameCount = ((durationMs / 1000.0) * OUTPUT_FRAME_RATE).toInt().coerceIn(1, MAX_FRAMES)
-
         val outputFile = File(context.cacheDir, "output_generation.mp4")
-        encoder = VideoEncoder(outputFile.absolutePath, FRAME_SIZE, FRAME_SIZE, OUTPUT_FRAME_RATE)
 
-        val outputBytes = ByteArray(FRAME_SIZE * FRAME_SIZE * 4)
-        var failedFrames = 0
-        for (i in 0 until frameCount) {
-            val timeUs = (i.toLong() * durationMs * 1000L) / frameCount
-            val rawFrame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                ?: continue
-            val scaledFrame = Bitmap.createScaledBitmap(rawFrame, FRAME_SIZE, FRAME_SIZE, true)
-            val drivingBytes = bitmapToRgbaBytes(scaledFrame)
+        val success = engine.processVideo(
+            sourceImagePath = sourceFile.absolutePath,
+            drivingVideoPath = drivingFile.absolutePath,
+            outputPath = outputFile.absolutePath
+        )
 
-            val success = engine.processFrame(sourceBytes, drivingBytes, outputBytes, FRAME_SIZE, FRAME_SIZE)
-            if (!success) {
-                failedFrames++
-                android.util.Log.e("FommEngine", "processFrame failed on frame $i")
-            }
-            encoder.encodeFrame(outputBytes)
-            onStatus("Generating frame ${i + 1}/$frameCount...")
+        if (success && outputFile.exists()) {
+            Uri.fromFile(outputFile)
+        } else {
+            android.util.Log.e("FommEngine", "Native engine processVideo returned false.")
+            null
         }
-
-        if (failedFrames == frameCount) {
-            android.util.Log.e("FommEngine", "All frames failed native inference.")
-            return@withContext null
-        }
-
-        if (outputFile.exists() && outputFile.length() > 0) Uri.fromFile(outputFile) else null
     } catch (e: Exception) {
         android.util.Log.e("FommEngine", "Exception during pipeline execution", e)
         null
-    } finally {
-        retriever?.release()
-        try {
-            encoder?.finish()
-        } catch (e: Exception) {
-            android.util.Log.e("FommEngine", "Error finalizing encoder", e)
-        }
     }
 }
