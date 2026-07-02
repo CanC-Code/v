@@ -19,9 +19,6 @@ android {
         versionName "1.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
-        vectorDrawables {
-            useSupportLibrary true
-        }
         
         ndk {
             abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
@@ -68,13 +65,6 @@ android {
             version "3.22.1"
         }
     }
-
-    // CRITICAL FIX: Explicitly package the extracted ONNX libraries into the APK
-    sourceSets {
-        main {
-            jniLibs.srcDirs += ["${layout.buildDirectory.get().asFile}/onnx_native/jni"]
-        }
-    }
     
     packaging {
         resources {
@@ -90,9 +80,9 @@ tasks.register('extractOnnxNative', Copy) {
     include "jni/**"
 }
 
-// Ensure extraction happens before both CMake configuration AND AGP library packaging
 tasks.whenTaskAdded { task ->
-    if (task.name.startsWith("configureCMake") || task.name.startsWith("buildCMake") || task.name.startsWith("mergeDebugJniLibFolders") || task.name.startsWith("mergeReleaseJniLibFolders")) {
+    // Bind extraction only to the CMake build phases
+    if (task.name.startsWith("configureCMake") || task.name.startsWith("buildCMake")) {
         task.dependsOn "extractOnnxNative"
     }
 }
@@ -110,6 +100,9 @@ dependencies {
     
     implementation 'io.coil-kt:coil-compose:2.6.0'
     
+    // This implementation line guarantees AGP automatically packages libonnxruntime.so into the APK.
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.17.1'
+    
+    // We use this solely to extract the C++ headers and linking objects for CMake.
     onnxExtraction 'com.microsoft.onnxruntime:onnxruntime-android:1.17.1@aar'
 }
