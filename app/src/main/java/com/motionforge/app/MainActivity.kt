@@ -133,7 +133,7 @@ fun MotionForgeApp() {
                                 painter = rememberAsyncImagePainter(uri),
                                 contentDescription = "Source Image",
                                 modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop // Use ContentScale.Fit if cropping creates misaligned bounding boxes
+                                contentScale = ContentScale.Crop 
                             )
                         } ?: Text("No Image", modifier = Modifier.align(Alignment.Center), color = Color.DarkGray)
                     }
@@ -173,7 +173,6 @@ fun MotionForgeApp() {
 
             Divider(modifier = Modifier.padding(vertical = 8.dp))
 
-            // Duration Setting
             Text("Output Duration: $maxDurationSeconds seconds", style = MaterialTheme.typography.titleMedium)
             Slider(
                 value = maxDurationSeconds.toFloat(),
@@ -226,7 +225,6 @@ fun MotionForgeApp() {
                 Text(text = statusMessage, style = MaterialTheme.typography.bodyMedium)
             }
 
-            // Real-Time Progression Bar
             if (isGenerating) {
                 Spacer(modifier = Modifier.height(8.dp))
                 LinearProgressIndicator(
@@ -288,7 +286,6 @@ fun getAssetPath(context: Context, baseName: String): String {
             onnxFile.outputStream().use { input.copyTo(it) }
         }
     }
-
     val dataFile = File(context.filesDir, "$baseName.data")
     try {
         if (!dataFile.exists()) {
@@ -298,6 +295,15 @@ fun getAssetPath(context: Context, baseName: String): String {
         }
     } catch (e: Exception) {}
     return onnxFile.absolutePath
+}
+
+// CRITICAL QUALITY FIX: Prevents aspect-ratio squashing that mangles AI keypoints
+fun cropAndScaleToSquare(src: Bitmap, size: Int = 256): Bitmap {
+    val minSide = minOf(src.width, src.height)
+    val x = (src.width - minSide) / 2
+    val y = (src.height - minSide) / 2
+    val cropped = Bitmap.createBitmap(src, x, y, minSide, minSide)
+    return Bitmap.createScaledBitmap(cropped, size, size, true)
 }
 
 private suspend fun executeMotionPipeline(
@@ -321,26 +327,26 @@ private suspend fun executeMotionPipeline(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val source = ImageDecoder.createSource(context.contentResolver, imgUri)
             sourceBitmap = ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
-                decoder.setTargetSize(256, 256)
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             }
         } else {
-            val bmp = MediaStore.Images.Media.getBitmap(context.contentResolver, imgUri)
-            sourceBitmap = Bitmap.createScaledBitmap(bmp, 256, 256, true)
+            sourceBitmap = MediaStore.Images.Media.getBitmap(context.contentResolver, imgUri)
         }
-        val sourceSoftwareBitmap = sourceBitmap!!.copy(Bitmap.Config.ARGB_8888, false)
+        
+        // Perfect square crop the initial image so keypoints aren't distorted
+        val croppedSource = cropAndScaleToSquare(sourceBitmap!!, 256)
+        val sourceSoftwareBitmap = croppedSource.copy(Bitmap.Config.ARGB_8888, false)
 
         val outputFile = File(context.cacheDir, "output_generation.mp4")
         if (outputFile.exists()) outputFile.delete()
         
-        // Cache driving video locally for JCodec parsing
         val tempDrivingFile = File(context.cacheDir, "temp_driving.mp4")
         context.contentResolver.openInputStream(vidUri)?.use { input ->
             FileOutputStream(tempDrivingFile).use { input.copyTo(it) }
         }
 
-        val inChannel = NIOUtils.readableChannel(tempDrivingFile)
-        val grabber = AndroidFrameGrab.createAndroidFrameGrab(inChannel)
+        var inChannel = NIOUtils.readableChannel(tempDrivingFile)
+        var grabber = AndroidFrameGrab.createAndroidFrameGrab(inChannel)
         
         val outChannel = NIOUtils.writableFileChannel(outputFile.absolutePath)
         val encoder = AndroidSequenceEncoder(outChannel, Rational.R(15, 1))
@@ -352,12 +358,21 @@ private suspend fun executeMotionPipeline(
         val outputBitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
         val startTime = System.currentTimeMillis()
 
-        // Pure software decoding loop ensures perfectly extracted keyframes
         var frame = grabber.frame
-        while (frame != null && currentFrameCount < targetFrames) {
+        while (currentFrameCount < targetFrames) {
             
-            val scaledFrame = Bitmap.createScaledBitmap(frame, 256, 256, true)
-            val swFrame = scaledFrame.copy(Bitmap.Config.ARGB_8888, false)
+            // LOOPING FIX: If video ends before the target duration, loop it back to the beginning
+            if (frame == null) {
+                NIOUtils.closeQuietly(inChannel)
+                inChannel = NIOUtils.readableChannel(tempDrivingFile)
+                grabber = AndroidFrameGrab.createAndroidFrameGrab(inChannel)
+                frame = grabber.frame
+                if (frame == null) break // Safety exit
+            }
+            
+            // Perfect square crop the driving video frame
+            val croppedFrame = cropAndScaleToSquare(frame, 256)
+            val swFrame = croppedFrame.copy(Bitmap.Config.ARGB_8888, false)
             
             val success = engine.processFrame(sourceSoftwareBitmap, swFrame, outputBitmap, currentFrameCount == 0)
             if (success) {
@@ -366,7 +381,6 @@ private suspend fun executeMotionPipeline(
             
             currentFrameCount++
             
-            // Re-eval metrics
             val elapsedMs = System.currentTimeMillis() - startTime
             val avgMsPerFrame = elapsedMs / currentFrameCount
             val remainingFrames = targetFrames - currentFrameCount
@@ -377,7 +391,7 @@ private suspend fun executeMotionPipeline(
                 onProgressUpdate(currentProgress, etaSec.toInt())
             }
             
-            frame = grabber.frame // Pull the next sequential frame from the video stream
+            frame = grabber.frame 
         }
         
         encoder.finish()
