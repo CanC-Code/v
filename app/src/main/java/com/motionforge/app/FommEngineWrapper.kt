@@ -1,4 +1,4 @@
-package com.motionforge.app
+package com.example.motionforge
 
 class FommEngineWrapper {
     external fun initialize(kpModelPath: String, genModelPath: String): Boolean
