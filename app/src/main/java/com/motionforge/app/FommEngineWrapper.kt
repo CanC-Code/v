@@ -11,6 +11,9 @@ class FommEngineWrapper {
 
     companion object {
         init {
+            // CRITICAL FIX: The dependent library must be loaded into memory 
+            // before the Android dynamic linker attempts to load motionforge_engine
+            System.loadLibrary("onnxruntime")
             System.loadLibrary("motionforge_engine")
         }
     }
