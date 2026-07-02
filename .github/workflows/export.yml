@@ -3,39 +3,103 @@ name: Export Codebase Context
 on:
   workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches:
+      - "main"
 
 jobs:
   gather-context:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Compile Codebase into Singular Text File
-      run: |
-        OUTPUT_FILE="codebase_review.txt"
-        echo "Codebase Review Export" > $OUTPUT_FILE
-        echo "================================================================" >> $OUTPUT_FILE
+      - name: Export Complete Source Context
+        shell: bash
+        run: |
+          set -euo pipefail
 
-        # Extract strictly tracked files using git ls-files, avoiding build caches and binaries natively
-        git ls-files | while read -r file; do
-            # Secondary check for tracked binaries/images
-            if [[ "$file" == *.png || "$file" == *.jpg || "$file" == *.jpeg || "$file" == *.gif || "$file" == *.webp || "$file" == *.apk || "$file" == *.aar || "$file" == *.jar || "$file" == *.keystore || "$file" == *.jks || "$file" == *.class || "$file" == *.ico || "$file" == "$OUTPUT_FILE" ]]; then
-                continue
-            fi
-            
-            if [ -f "$file" ]; then
-                echo -e "\n\n================================================================" >> $OUTPUT_FILE
-                echo "FILE: ./$file" >> $OUTPUT_FILE
-                echo "================================================================" >> $OUTPUT_FILE
-                cat "$file" >> $OUTPUT_FILE || echo "[Unreadable file skipped]" >> $OUTPUT_FILE
-            fi
-        done
+          OUTPUT_FILE="codebase_review.txt"
 
-    - name: Upload Codebase Context Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: codebase-review-context
-        path: codebase_review.txt
+          echo "Codebase Review Export" > "$OUTPUT_FILE"
+          echo "Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> "$OUTPUT_FILE"
+          echo "Commit: $(git rev-parse HEAD)" >> "$OUTPUT_FILE"
+          echo "Branch: ${GITHUB_REF_NAME}" >> "$OUTPUT_FILE"
+          echo "================================================================" >> "$OUTPUT_FILE"
+
+          skip_file() {
+              local f="$1"
+
+              case "$f" in
+                  *.png|*.jpg|*.jpeg|*.gif|*.bmp|*.webp|*.ico|*.icns|*.svg)
+                      return 0;;
+                  *.apk|*.aab|*.aar|*.jar|*.dex|*.so|*.o|*.a|*.dll|*.exe)
+                      return 0;;
+                  *.class|*.keystore|*.jks)
+                      return 0;;
+                  *.zip|*.tar|*.gz|*.xz|*.7z|*.rar)
+                      return 0;;
+                  *.mp4|*.mov|*.avi|*.mkv|*.webm|*.wav|*.ogg|*.mp3)
+                      return 0;;
+              esac
+
+              case "$f" in
+                  .git/*|.gradle/*|build/*|*/build/*|*/.cxx/*|*/externalNativeBuild/*)
+                      return 0;;
+              esac
+
+              if [[ "$f" == "$OUTPUT_FILE" ]]; then
+                  return 0
+              fi
+
+              return 1
+          }
+
+          export_file() {
+
+              local file="$1"
+
+              echo "" >> "$OUTPUT_FILE"
+              echo "" >> "$OUTPUT_FILE"
+              echo "================================================================" >> "$OUTPUT_FILE"
+              echo "FILE: ./$file" >> "$OUTPUT_FILE"
+              echo "================================================================" >> "$OUTPUT_FILE"
+
+              echo "Size: $(wc -c < "$file") bytes" >> "$OUTPUT_FILE"
+              echo "Lines: $(wc -l < "$file")" >> "$OUTPUT_FILE"
+              echo "SHA256: $(sha256sum "$file" | cut -d' ' -f1)" >> "$OUTPUT_FILE"
+
+              echo "----------------------------------------------------------------" >> "$OUTPUT_FILE"
+
+              cat "$file"
+
+              echo >> "$OUTPUT_FILE"
+          }
+
+          while IFS= read -r file; do
+
+              if skip_file "$file"; then
+                  continue
+              fi
+
+              [[ -f "$file" ]] || continue
+
+              if file "$file" | grep -qi "text"; then
+                  export_file "$file" >> "$OUTPUT_FILE"
+              fi
+
+          done < <(git ls-files | sort)
+
+          echo "" >> "$OUTPUT_FILE"
+          echo "================================================================" >> "$OUTPUT_FILE"
+          echo "END OF EXPORT" >> "$OUTPUT_FILE"
+
+      - name: Upload Codebase Context
+        uses: actions/upload-artifact@v4
+        with:
+          name: codebase-review-context
+          path: codebase_review.txt
+          if-no-files-found: error
+          compression-level: 0
