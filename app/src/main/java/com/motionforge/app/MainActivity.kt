@@ -252,7 +252,6 @@ fun getAssetPath(context: Context, baseName: String): String {
             }
         }
     } catch (e: Exception) {
-        // Safe fallthrough if the model does not utilize a detached external .data weight file
     }
     
     return onnxFile.absolutePath
@@ -269,7 +268,6 @@ private suspend fun executeMotionPipeline(context: Context, imgUri: Uri, vidUri:
             return@withContext null
         }
 
-        // 1. Decode & Guarantee Software Bitmap representation for JNI Bridge
         var sourceBitmap: Bitmap?
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val source = ImageDecoder.createSource(context.contentResolver, imgUri)
@@ -286,11 +284,9 @@ private suspend fun executeMotionPipeline(context: Context, imgUri: Uri, vidUri:
         val outputFile = File(context.cacheDir, "output_generation.mp4")
         if (outputFile.exists()) outputFile.delete()
         
-        // 2. Prepare JCodec Pure Java Multiplexer
         val outChannel = NIOUtils.writableFileChannel(outputFile.absolutePath)
         val encoder = AndroidSequenceEncoder(outChannel, Rational.R(15, 1))
 
-        // 3. Extrapolate Video Frames natively
         val retriever = MediaMetadataRetriever()
         context.contentResolver.openFileDescriptor(vidUri, "r")?.fileDescriptor?.let {
             retriever.setDataSource(it)
@@ -312,7 +308,6 @@ private suspend fun executeMotionPipeline(context: Context, imgUri: Uri, vidUri:
                 val scaledFrame = Bitmap.createScaledBitmap(frame, 256, 256, true)
                 val swFrame = scaledFrame.copy(Bitmap.Config.ARGB_8888, false)
                 
-                // 4. Inject specific sequence states into C++ ONNX graph and await rendered response
                 val success = engine.processFrame(sourceSoftwareBitmap, swFrame, outputBitmap, i == 0)
                 if (success) {
                     encoder.encodeImage(outputBitmap)
