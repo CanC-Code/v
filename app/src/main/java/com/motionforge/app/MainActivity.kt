@@ -3,7 +3,6 @@ package com.example.motionforge
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
-import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -31,6 +30,7 @@ import coil.compose.rememberAsyncImagePainter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.jcodec.api.android.AndroidFrameGrab
 import org.jcodec.api.android.AndroidSequenceEncoder
 import org.jcodec.common.io.NIOUtils
 import org.jcodec.common.model.Rational
@@ -64,11 +64,12 @@ fun MotionForgeApp() {
     var drivingVideoUri by remember { mutableStateOf<Uri?>(null) }
     var resultVideoUri by remember { mutableStateOf<Uri?>(null) }
     
-    // UI State for Progression Tracking
+    // UI State for Progression and Settings
     var isGenerating by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("") }
     var generationProgress by remember { mutableFloatStateOf(0f) }
     var etaSeconds by remember { mutableIntStateOf(0) }
+    var maxDurationSeconds by remember { mutableIntStateOf(5) }
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) sourceImageUri = uri
@@ -132,7 +133,7 @@ fun MotionForgeApp() {
                                 painter = rememberAsyncImagePainter(uri),
                                 contentDescription = "Source Image",
                                 modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
+                                contentScale = ContentScale.Crop // Use ContentScale.Fit if cropping creates misaligned bounding boxes
                             )
                         } ?: Text("No Image", modifier = Modifier.align(Alignment.Center), color = Color.DarkGray)
                     }
@@ -172,6 +173,17 @@ fun MotionForgeApp() {
 
             Divider(modifier = Modifier.padding(vertical = 8.dp))
 
+            // Duration Setting
+            Text("Output Duration: $maxDurationSeconds seconds", style = MaterialTheme.typography.titleMedium)
+            Slider(
+                value = maxDurationSeconds.toFloat(),
+                onValueChange = { maxDurationSeconds = it.toInt() },
+                valueRange = 1f..15f,
+                steps = 13,
+                modifier = Modifier.padding(horizontal = 8.dp),
+                enabled = !isGenerating
+            )
+
             Button(
                 onClick = {
                     if (sourceImageUri != null && drivingVideoUri != null) {
@@ -186,10 +198,11 @@ fun MotionForgeApp() {
                                 context = context, 
                                 imgUri = sourceImageUri!!, 
                                 vidUri = drivingVideoUri!!,
+                                maxDuration = maxDurationSeconds,
                                 onProgressUpdate = { progress, eta ->
                                     generationProgress = progress
                                     etaSeconds = eta
-                                    statusMessage = "Processing Frame... ${(progress * 100).toInt()}%"
+                                    statusMessage = "Synthesizing AI Frames... ${(progress * 100).toInt()}%"
                                 }
                             )
                             
@@ -283,18 +296,15 @@ fun getAssetPath(context: Context, baseName: String): String {
                 dataFile.outputStream().use { input.copyTo(it) }
             }
         }
-    } catch (e: Exception) {
-        // Safe fallthrough
-    }
-    
+    } catch (e: Exception) {}
     return onnxFile.absolutePath
 }
 
-// Ensure execution happens on a background IO thread
 private suspend fun executeMotionPipeline(
     context: Context, 
     imgUri: Uri, 
     vidUri: Uri,
+    maxDuration: Int,
     onProgressUpdate: (Float, Int) -> Unit
 ): Uri? = withContext(Dispatchers.IO) {
     try {
@@ -307,7 +317,6 @@ private suspend fun executeMotionPipeline(
             return@withContext null
         }
 
-        // Guarantee Software Bitmap representation for JNI Bridge
         var sourceBitmap: Bitmap?
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val source = ImageDecoder.createSource(context.contentResolver, imgUri)
@@ -324,62 +333,56 @@ private suspend fun executeMotionPipeline(
         val outputFile = File(context.cacheDir, "output_generation.mp4")
         if (outputFile.exists()) outputFile.delete()
         
-        // Ensure you have added the JCodec dependencies to build.gradle
+        // Cache driving video locally for JCodec parsing
+        val tempDrivingFile = File(context.cacheDir, "temp_driving.mp4")
+        context.contentResolver.openInputStream(vidUri)?.use { input ->
+            FileOutputStream(tempDrivingFile).use { input.copyTo(it) }
+        }
+
+        val inChannel = NIOUtils.readableChannel(tempDrivingFile)
+        val grabber = AndroidFrameGrab.createAndroidFrameGrab(inChannel)
+        
         val outChannel = NIOUtils.writableFileChannel(outputFile.absolutePath)
         val encoder = AndroidSequenceEncoder(outChannel, Rational.R(15, 1))
 
-        val retriever = MediaMetadataRetriever()
-        context.contentResolver.openFileDescriptor(vidUri, "r")?.fileDescriptor?.let {
-            retriever.setDataSource(it)
-        }
-        
-        val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-        val durationMs = durationStr?.toLong() ?: 0L
-        
-        // Establish extraction constraints
         val fps = 15
-        val frameIntervalUs = 1000000L / fps
-        val totalFrames = ((durationMs * 1000L) / frameIntervalUs).toInt()
-        
-        if (totalFrames <= 0) {
-            android.util.Log.e("FommEngine", "Failed to extract frames. Video duration is zero.")
-            return@withContext null
-        }
+        val targetFrames = maxDuration * fps
+        var currentFrameCount = 0
         
         val outputBitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
         val startTime = System.currentTimeMillis()
-        
-        for (i in 0 until totalFrames) {
-            val timeUs = i * frameIntervalUs
-            val frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+
+        // Pure software decoding loop ensures perfectly extracted keyframes
+        var frame = grabber.frame
+        while (frame != null && currentFrameCount < targetFrames) {
             
-            if (frame != null) {
-                val scaledFrame = Bitmap.createScaledBitmap(frame, 256, 256, true)
-                val swFrame = scaledFrame.copy(Bitmap.Config.ARGB_8888, false)
-                
-                // Route through our new JNI Frame hook
-                val success = engine.processFrame(sourceSoftwareBitmap, swFrame, outputBitmap, i == 0)
-                if (success) {
-                    encoder.encodeImage(outputBitmap)
-                }
+            val scaledFrame = Bitmap.createScaledBitmap(frame, 256, 256, true)
+            val swFrame = scaledFrame.copy(Bitmap.Config.ARGB_8888, false)
+            
+            val success = engine.processFrame(sourceSoftwareBitmap, swFrame, outputBitmap, currentFrameCount == 0)
+            if (success) {
+                encoder.encodeImage(outputBitmap)
             }
             
-            // ETA and Progress Math
-            val elapsedMs = System.currentTimeMillis() - startTime
-            val avgMsPerFrame = elapsedMs / (i + 1)
-            val remainingFrames = totalFrames - (i + 1)
-            val etaSec = (remainingFrames * avgMsPerFrame) / 1000
-            val currentProgress = (i + 1).toFloat() / totalFrames.toFloat()
+            currentFrameCount++
             
-            // Dispatch UI updates to main thread
+            // Re-eval metrics
+            val elapsedMs = System.currentTimeMillis() - startTime
+            val avgMsPerFrame = elapsedMs / currentFrameCount
+            val remainingFrames = targetFrames - currentFrameCount
+            val etaSec = (remainingFrames * avgMsPerFrame) / 1000
+            val currentProgress = currentFrameCount.toFloat() / targetFrames.toFloat()
+            
             withContext(Dispatchers.Main) {
                 onProgressUpdate(currentProgress, etaSec.toInt())
             }
+            
+            frame = grabber.frame // Pull the next sequential frame from the video stream
         }
         
         encoder.finish()
         NIOUtils.closeQuietly(outChannel)
-        retriever.release()
+        NIOUtils.closeQuietly(inChannel)
 
         if (outputFile.exists()) Uri.fromFile(outputFile) else null
 
