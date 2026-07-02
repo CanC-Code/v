@@ -1,14 +1,14 @@
 package com.example.motionforge
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.ImageDecoder
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.widget.VideoView
-import android.media.MediaMetadataRetriever
-import android.graphics.Bitmap
-import android.graphics.ImageDecoder
 import android.provider.MediaStore
+import android.widget.VideoView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -63,8 +63,12 @@ fun MotionForgeApp() {
     var sourceImageUri by remember { mutableStateOf<Uri?>(null) }
     var drivingVideoUri by remember { mutableStateOf<Uri?>(null) }
     var resultVideoUri by remember { mutableStateOf<Uri?>(null) }
+    
+    // UI State for Progression Tracking
     var isGenerating by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("") }
+    var generationProgress by remember { mutableFloatStateOf(0f) }
+    var etaSeconds by remember { mutableIntStateOf(0) }
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) sourceImageUri = uri
@@ -135,7 +139,8 @@ fun MotionForgeApp() {
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(
                         onClick = { imagePicker.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isGenerating
                     ) {
                         Text("Select Image")
                     }
@@ -157,7 +162,8 @@ fun MotionForgeApp() {
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(
                         onClick = { videoPicker.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isGenerating
                     ) {
                         Text("Select Video")
                     }
@@ -170,10 +176,23 @@ fun MotionForgeApp() {
                 onClick = {
                     if (sourceImageUri != null && drivingVideoUri != null) {
                         isGenerating = true
-                        statusMessage = "Synthesizing Motion Transfer..."
+                        generationProgress = 0f
+                        etaSeconds = 0
+                        statusMessage = "Initializing Pipeline..."
                         resultVideoUri = null
+                        
                         coroutineScope.launch {
-                            val result = executeMotionPipeline(context, sourceImageUri!!, drivingVideoUri!!)
+                            val result = executeMotionPipeline(
+                                context = context, 
+                                imgUri = sourceImageUri!!, 
+                                vidUri = drivingVideoUri!!,
+                                onProgressUpdate = { progress, eta ->
+                                    generationProgress = progress
+                                    etaSeconds = eta
+                                    statusMessage = "Processing Frame... ${(progress * 100).toInt()}%"
+                                }
+                            )
+                            
                             if (result != null) {
                                 resultVideoUri = result
                                 statusMessage = "Generation Successful!"
@@ -194,11 +213,24 @@ fun MotionForgeApp() {
                 Text(text = statusMessage, style = MaterialTheme.typography.bodyMedium)
             }
 
+            // Real-Time Progression Bar
             if (isGenerating) {
-                CircularProgressIndicator()
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = generationProgress,
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .height(8.dp)
+                )
+                Text(
+                    text = "Estimated time remaining: ${etaSeconds}s",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(top = 4.dp),
+                    color = Color.Gray
+                )
             }
 
-            if (resultVideoUri != null) {
+            if (resultVideoUri != null && !isGenerating) {
                 Text("Result Preview:", style = MaterialTheme.typography.titleMedium)
                 Box(
                     modifier = Modifier
@@ -252,12 +284,19 @@ fun getAssetPath(context: Context, baseName: String): String {
             }
         }
     } catch (e: Exception) {
+        // Safe fallthrough
     }
     
     return onnxFile.absolutePath
 }
 
-private suspend fun executeMotionPipeline(context: Context, imgUri: Uri, vidUri: Uri): Uri? = withContext(Dispatchers.IO) {
+// Ensure execution happens on a background IO thread
+private suspend fun executeMotionPipeline(
+    context: Context, 
+    imgUri: Uri, 
+    vidUri: Uri,
+    onProgressUpdate: (Float, Int) -> Unit
+): Uri? = withContext(Dispatchers.IO) {
     try {
         val engine = FommEngineWrapper()
         val kpModelPath = getAssetPath(context, "FOMMDetector")
@@ -268,6 +307,7 @@ private suspend fun executeMotionPipeline(context: Context, imgUri: Uri, vidUri:
             return@withContext null
         }
 
+        // Guarantee Software Bitmap representation for JNI Bridge
         var sourceBitmap: Bitmap?
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val source = ImageDecoder.createSource(context.contentResolver, imgUri)
@@ -284,6 +324,7 @@ private suspend fun executeMotionPipeline(context: Context, imgUri: Uri, vidUri:
         val outputFile = File(context.cacheDir, "output_generation.mp4")
         if (outputFile.exists()) outputFile.delete()
         
+        // Ensure you have added the JCodec dependencies to build.gradle
         val outChannel = NIOUtils.writableFileChannel(outputFile.absolutePath)
         val encoder = AndroidSequenceEncoder(outChannel, Rational.R(15, 1))
 
@@ -294,11 +335,19 @@ private suspend fun executeMotionPipeline(context: Context, imgUri: Uri, vidUri:
         
         val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
         val durationMs = durationStr?.toLong() ?: 0L
+        
+        // Establish extraction constraints
         val fps = 15
         val frameIntervalUs = 1000000L / fps
         val totalFrames = ((durationMs * 1000L) / frameIntervalUs).toInt()
         
+        if (totalFrames <= 0) {
+            android.util.Log.e("FommEngine", "Failed to extract frames. Video duration is zero.")
+            return@withContext null
+        }
+        
         val outputBitmap = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
+        val startTime = System.currentTimeMillis()
         
         for (i in 0 until totalFrames) {
             val timeUs = i * frameIntervalUs
@@ -308,10 +357,23 @@ private suspend fun executeMotionPipeline(context: Context, imgUri: Uri, vidUri:
                 val scaledFrame = Bitmap.createScaledBitmap(frame, 256, 256, true)
                 val swFrame = scaledFrame.copy(Bitmap.Config.ARGB_8888, false)
                 
+                // Route through our new JNI Frame hook
                 val success = engine.processFrame(sourceSoftwareBitmap, swFrame, outputBitmap, i == 0)
                 if (success) {
                     encoder.encodeImage(outputBitmap)
                 }
+            }
+            
+            // ETA and Progress Math
+            val elapsedMs = System.currentTimeMillis() - startTime
+            val avgMsPerFrame = elapsedMs / (i + 1)
+            val remainingFrames = totalFrames - (i + 1)
+            val etaSec = (remainingFrames * avgMsPerFrame) / 1000
+            val currentProgress = (i + 1).toFloat() / totalFrames.toFloat()
+            
+            // Dispatch UI updates to main thread
+            withContext(Dispatchers.Main) {
+                onProgressUpdate(currentProgress, etaSec.toInt())
             }
         }
         
