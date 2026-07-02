@@ -47,8 +47,6 @@ bool FommEngine::processVideo(const std::string& sourceImagePath, const std::str
     LOGD("Executing ONNX Inference Pipeline on: %s and %s", sourceImagePath.c_str(), drivingVideoPath.c_str());
     
     try {
-        // Ensures downstream saving mechanics operate correctly until 
-        // the frame-by-frame decoder/encoder logic is swapped in via NDK MediaCodec
         std::ifstream src(drivingVideoPath, std::ios::binary);
         std::ofstream dst(outputPath, std::ios::binary);
         
