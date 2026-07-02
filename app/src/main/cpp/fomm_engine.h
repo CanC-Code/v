@@ -5,7 +5,6 @@
 #include <vector>
 #include <string>
 #include <memory>
-#include <android/bitmap.h>
 
 std::string jstringToString(JNIEnv* env, jstring jstr);
 
@@ -15,7 +14,7 @@ public:
     ~FommEngine();
 
     bool initialize(const std::string& kpModelPath, const std::string& genModelPath);
-    bool processVideo(const std::string& sourceImagePath, const std::string& drivingVideoPath, const std::string& outputPath);
+    bool processFrame(JNIEnv* env, jobject sourceBitmap, jobject drivingBitmap, jobject outputBitmap, bool isFirstFrame);
 
 private:
     std::unique_ptr<Ort::Env> env;
@@ -26,7 +25,10 @@ private:
     const int64_t CHANNELS = 3;
     const int64_t TARGET_SIZE = 256;
 
-    // Internal ONNX execution helpers
+    std::vector<float> cachedSourceKp;
+    std::vector<float> cachedInitialDrivingKp;
+    std::vector<float> sourceImageBuffer;
+
     std::vector<float> extractKeypoints(const std::vector<float>& inputFrame);
     std::vector<float> generateFrame(const std::vector<float>& sourceFrame, 
                                      const std::vector<float>& kpSource, 
