@@ -2,6 +2,7 @@
 #include <android/log.h>
 #include <android/bitmap.h>
 #include <algorithm>
+#include <string>
 
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "FommEngine", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "FommEngine", __VA_ARGS__)
@@ -17,9 +18,7 @@ std::string jstringToString(JNIEnv* env, jstring jstr) {
     return str;
 }
 
-FommEngine::FommEngine() 
-    : env(std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "FommEngine")) {}
-
+FommEngine::FommEngine() : env(std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "FommEngine")) {}
 FommEngine::~FommEngine() {}
 
 bool FommEngine::initialize(const std::string& kpPath, const std::string& genPath) {
@@ -54,9 +53,7 @@ std::vector<float> FommEngine::extractKeypoints(const std::vector<float>& inputF
     const char* inputNames[] = {inputNamePtr.get()};
     const char* outputNames[] = {outputNamePtr.get()};
 
-    auto outputTensors = kpSession->Run(Ort::RunOptions{nullptr}, 
-                                        inputNames, &inputTensor, 1, 
-                                        outputNames, 1);
+    auto outputTensors = kpSession->Run(Ort::RunOptions{nullptr}, inputNames, &inputTensor, 1, outputNames, 1);
 
     float* floatarr = outputTensors.front().GetTensorMutableData<float>();
     size_t count = outputTensors.front().GetTensorTypeAndShapeInfo().GetElementCount();
@@ -104,23 +101,33 @@ std::vector<float> FommEngine::generateFrame(const std::vector<float>& sourceFra
                 inputBuffers[i][k * 4 + 3] = 1.0f; 
             }
         } 
-        else if (name.find("value") != std::string::npos || dims.size() == 3) {
-            if (name.find("source") != std::string::npos && kpSource.size() <= elementCount) {
-                std::copy(kpSource.begin(), kpSource.end(), inputBuffers[i].begin());
-            } else if (name.find("driving") != std::string::npos && kpDriving.size() <= elementCount) {
-                std::copy(kpDriving.begin(), kpDriving.end(), inputBuffers[i].begin());
-            }
-        }
-        else if (name.find("image") != std::string::npos && sourceFrame.size() <= elementCount) {
+        else if (name == "kp_driving") {
+            std::copy(kpDriving.begin(), kpDriving.end(), inputBuffers[i].begin());
+        } 
+        else if (name == "kp_source") {
+            std::copy(kpSource.begin(), kpSource.end(), inputBuffers[i].begin());
+        } 
+        else if (name == "kp_driving_initial") {
+            std::copy(kpDrivingInitial.begin(), kpDrivingInitial.end(), inputBuffers[i].begin());
+        } 
+        else if (name == "source_image") {
             std::copy(sourceFrame.begin(), sourceFrame.end(), inputBuffers[i].begin());
+        } 
+        else {
+            // Strict heuristics fallback for alternative export names
+            if (name.find("initial") != std::string::npos && dims.size() == 3) {
+                 std::copy(kpDrivingInitial.begin(), kpDrivingInitial.end(), inputBuffers[i].begin());
+            } else if (name.find("driving") != std::string::npos && dims.size() == 3) {
+                 std::copy(kpDriving.begin(), kpDriving.end(), inputBuffers[i].begin());
+            } else if (name.find("source") != std::string::npos && dims.size() == 3) {
+                 std::copy(kpSource.begin(), kpSource.end(), inputBuffers[i].begin());
+            } else if (name.find("image") != std::string::npos && dims.size() == 4) {
+                 std::copy(sourceFrame.begin(), sourceFrame.end(), inputBuffers[i].begin());
+            }
         }
 
         inputTensors.push_back(Ort::Value::CreateTensor<float>(
-            memoryInfo, 
-            inputBuffers[i].data(), 
-            inputBuffers[i].size(), 
-            dims.data(), 
-            dims.size()
+            memoryInfo, inputBuffers[i].data(), inputBuffers[i].size(), dims.data(), dims.size()
         ));
     }
 
@@ -150,7 +157,6 @@ bool FommEngine::processFrame(JNIEnv* env, jobject sourceBitmap, jobject driving
     AndroidBitmapInfo info;
     void* pixels;
     
-    // Evaluate Source Image
     if (isFirstFrame) {
         AndroidBitmap_getInfo(env, sourceBitmap, &info);
         AndroidBitmap_lockPixels(env, sourceBitmap, &pixels);
@@ -162,9 +168,10 @@ bool FommEngine::processFrame(JNIEnv* env, jobject sourceBitmap, jobject driving
             sourceImageBuffer[2 * info.width * info.height + i] = ((c >> 16) & 0xFF) / 255.0f;
         }
         AndroidBitmap_unlockPixels(env, sourceBitmap);
+        
+        cachedSourceKp = extractKeypoints(sourceImageBuffer);
     }
 
-    // Evaluate Current Driving Frame
     AndroidBitmap_getInfo(env, drivingBitmap, &info);
     AndroidBitmap_lockPixels(env, drivingBitmap, &pixels);
     uint32_t* drv = (uint32_t*)pixels;
@@ -176,17 +183,13 @@ bool FommEngine::processFrame(JNIEnv* env, jobject sourceBitmap, jobject driving
     }
     AndroidBitmap_unlockPixels(env, drivingBitmap);
 
-    // Initial Tensor Execution
     if (isFirstFrame) {
-        cachedSourceKp = extractKeypoints(sourceImageBuffer);
         cachedInitialDrivingKp = extractKeypoints(drivingBuffer);
     }
 
-    // Process Dense Delta Motion 
     std::vector<float> kpDriving = extractKeypoints(drivingBuffer);
     std::vector<float> outputFrame = generateFrame(sourceImageBuffer, cachedSourceKp, kpDriving, cachedInitialDrivingKp);
 
-    // Bind Synthesized Frame back to JNI Object
     AndroidBitmap_getInfo(env, outputBitmap, &info);
     AndroidBitmap_lockPixels(env, outputBitmap, &pixels);
     uint32_t* out = (uint32_t*)pixels;
