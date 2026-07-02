@@ -6,10 +6,6 @@
 #include <string>
 #include <memory>
 #include <android/bitmap.h>
-#include <media/NdkMediaExtractor.h>
-#include <media/NdkMediaCodec.h>
-#include <media/NdkMediaFormat.h>
-#include <media/NdkMediaMuxer.h>
 
 std::string jstringToString(JNIEnv* env, jstring jstr);
 
@@ -29,8 +25,6 @@ private:
     const int64_t BATCH_SIZE = 1;
     const int64_t CHANNELS = 3;
     const int64_t TARGET_SIZE = 256;
-
-    Ort::AllocatorWithDefaultOptions allocator;
 
     // Internal ONNX execution helpers
     std::vector<float> extractKeypoints(const std::vector<float>& inputFrame);
