@@ -81,7 +81,6 @@ tasks.register('extractOnnxNative', Copy) {
 }
 
 tasks.whenTaskAdded { task ->
-    // Bind extraction only to the CMake build phases
     if (task.name.startsWith("configureCMake") || task.name.startsWith("buildCMake")) {
         task.dependsOn "extractOnnxNative"
     }
@@ -100,9 +99,10 @@ dependencies {
     
     implementation 'io.coil-kt:coil-compose:2.6.0'
     
-    // This implementation line guarantees AGP automatically packages libonnxruntime.so into the APK.
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.17.1'
-    
-    // We use this solely to extract the C++ headers and linking objects for CMake.
     onnxExtraction 'com.microsoft.onnxruntime:onnxruntime-android:1.17.1@aar'
+    
+    // JCodec for pure Java MP4 frame muxing
+    implementation 'org.jcodec:jcodec:0.2.5'
+    implementation 'org.jcodec:jcodec-android:0.2.5'
 }
