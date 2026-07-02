@@ -156,15 +156,25 @@ bool FommEngine::processFrame(JNIEnv* env, jobject sourceBitmap, jobject driving
     AndroidBitmapInfo info;
     void* pixels;
     
+    // CRITICAL QUALITY FIX: Byte-level memory extraction to guarantee identical channel maps
+    // Java ARGB_8888 corresponds exactly to NDK RGBA memory layout (R=0, G=1, B=2, A=3).
     if (isFirstFrame) {
         AndroidBitmap_getInfo(env, sourceBitmap, &info);
         AndroidBitmap_lockPixels(env, sourceBitmap, &pixels);
-        uint32_t* src = (uint32_t*)pixels;
-        for (int i = 0; i < info.width * info.height; ++i) {
-            uint32_t c = src[i];
-            sourceImageBuffer[i] = (c & 0xFF) / 255.0f;
-            sourceImageBuffer[info.width * info.height + i] = ((c >> 8) & 0xFF) / 255.0f;
-            sourceImageBuffer[2 * info.width * info.height + i] = ((c >> 16) & 0xFF) / 255.0f;
+        
+        for (uint32_t y = 0; y < info.height; ++y) {
+            uint8_t* row = (uint8_t*)pixels + y * info.stride;
+            for (uint32_t x = 0; x < info.width; ++x) {
+                uint8_t* p = row + x * 4;
+                float r = p[0] / 255.0f;
+                float g = p[1] / 255.0f;
+                float b = p[2] / 255.0f;
+                
+                int i = y * info.width + x;
+                sourceImageBuffer[i] = r;
+                sourceImageBuffer[info.width * info.height + i] = g;
+                sourceImageBuffer[2 * info.width * info.height + i] = b;
+            }
         }
         AndroidBitmap_unlockPixels(env, sourceBitmap);
         
@@ -173,12 +183,20 @@ bool FommEngine::processFrame(JNIEnv* env, jobject sourceBitmap, jobject driving
 
     AndroidBitmap_getInfo(env, drivingBitmap, &info);
     AndroidBitmap_lockPixels(env, drivingBitmap, &pixels);
-    uint32_t* drv = (uint32_t*)pixels;
-    for (int i = 0; i < info.width * info.height; ++i) {
-        uint32_t c = drv[i];
-        drivingBuffer[i] = (c & 0xFF) / 255.0f;
-        drivingBuffer[info.width * info.height + i] = ((c >> 8) & 0xFF) / 255.0f;
-        drivingBuffer[2 * info.width * info.height + i] = ((c >> 16) & 0xFF) / 255.0f;
+    
+    for (uint32_t y = 0; y < info.height; ++y) {
+        uint8_t* row = (uint8_t*)pixels + y * info.stride;
+        for (uint32_t x = 0; x < info.width; ++x) {
+            uint8_t* p = row + x * 4;
+            float r = p[0] / 255.0f;
+            float g = p[1] / 255.0f;
+            float b = p[2] / 255.0f;
+            
+            int i = y * info.width + x;
+            drivingBuffer[i] = r;
+            drivingBuffer[info.width * info.height + i] = g;
+            drivingBuffer[2 * info.width * info.height + i] = b;
+        }
     }
     AndroidBitmap_unlockPixels(env, drivingBitmap);
 
@@ -191,13 +209,21 @@ bool FommEngine::processFrame(JNIEnv* env, jobject sourceBitmap, jobject driving
 
     AndroidBitmap_getInfo(env, outputBitmap, &info);
     AndroidBitmap_lockPixels(env, outputBitmap, &pixels);
-    uint32_t* out = (uint32_t*)pixels;
     
-    for (int i = 0; i < info.width * info.height; ++i) {
-        float r = std::clamp(outputFrame[i], 0.0f, 1.0f) * 255.0f;
-        float g = std::clamp(outputFrame[info.width * info.height + i], 0.0f, 1.0f) * 255.0f;
-        float b = std::clamp(outputFrame[2 * info.width * info.height + i], 0.0f, 1.0f) * 255.0f;
-        out[i] = (0xFF << 24) | (((uint32_t)b & 0xFF) << 16) | (((uint32_t)g & 0xFF) << 8) | ((uint32_t)r & 0xFF);
+    for (uint32_t y = 0; y < info.height; ++y) {
+        uint8_t* row = (uint8_t*)pixels + y * info.stride;
+        for (uint32_t x = 0; x < info.width; ++x) {
+            int i = y * info.width + x;
+            float r = std::clamp(outputFrame[i], 0.0f, 1.0f);
+            float g = std::clamp(outputFrame[info.width * info.height + i], 0.0f, 1.0f);
+            float b = std::clamp(outputFrame[2 * info.width * info.height + i], 0.0f, 1.0f);
+            
+            uint8_t* p = row + x * 4;
+            p[0] = (uint8_t)(r * 255.0f);
+            p[1] = (uint8_t)(g * 255.0f);
+            p[2] = (uint8_t)(b * 255.0f);
+            p[3] = 0xFF; // Alpha
+        }
     }
     AndroidBitmap_unlockPixels(env, outputBitmap);
 
