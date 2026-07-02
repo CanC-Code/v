@@ -1,18 +1,19 @@
 package com.example.motionforge
 
+import android.graphics.Bitmap
+
 class FommEngineWrapper {
     external fun initialize(kpModelPath: String, genModelPath: String): Boolean
     
-    external fun processVideo(
-        sourceImagePath: String,
-        drivingVideoPath: String,
-        outputPath: String
+    external fun processFrame(
+        sourceBitmap: Bitmap,
+        drivingBitmap: Bitmap,
+        outputBitmap: Bitmap,
+        isFirstFrame: Boolean
     ): Boolean
 
     companion object {
         init {
-            // CRITICAL FIX: The dependent library must be loaded into memory 
-            // before the Android dynamic linker attempts to load motionforge_engine
             System.loadLibrary("onnxruntime")
             System.loadLibrary("motionforge_engine")
         }
