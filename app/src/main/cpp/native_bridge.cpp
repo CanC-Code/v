@@ -28,22 +28,12 @@ Java_com_example_motionforge_FommEngineWrapper_initialize(JNIEnv* env, jobject /
 
 extern "C"
 JNIEXPORT jboolean JNICALL
-Java_com_example_motionforge_FommEngineWrapper_processVideo(JNIEnv* env, jobject /* this */, jstring imagePath, jstring videoPath, jstring outputPath) {
+Java_com_example_motionforge_FommEngineWrapper_processFrame(JNIEnv* env, jobject /* this */, jobject sourceBitmap, jobject drivingBitmap, jobject outputBitmap, jboolean isFirstFrame) {
     if (!gFommEngine) {
         __android_log_print(ANDROID_LOG_ERROR, "native_bridge", "FommEngine not initialized");
         return JNI_FALSE;
     }
 
-    if (!imagePath || !videoPath || !outputPath) {
-        __android_log_print(ANDROID_LOG_ERROR, "native_bridge", "Null path provided to JNI");
-        return JNI_FALSE;
-    }
-
-    std::string imgPath = jstringToString(env, imagePath);
-    std::string vidPath = jstringToString(env, videoPath);
-    std::string outPath = jstringToString(env, outputPath);
-
-    bool success = gFommEngine->processVideo(imgPath, vidPath, outPath);
-
+    bool success = gFommEngine->processFrame(env, sourceBitmap, drivingBitmap, outputBitmap, isFirstFrame);
     return success ? JNI_TRUE : JNI_FALSE;
 }
