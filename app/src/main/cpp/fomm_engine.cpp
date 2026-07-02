@@ -1,8 +1,7 @@
 #include "fomm_engine.h"
 #include <android/log.h>
-#include <fstream>
-#include <vector>
-#include <string>
+#include <android/bitmap.h>
+#include <algorithm>
 
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "FommEngine", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "FommEngine", __VA_ARGS__)
@@ -31,7 +30,6 @@ bool FommEngine::initialize(const std::string& kpPath, const std::string& genPat
         
         kpSession = std::make_unique<Ort::Session>(*env, kpPath.c_str(), options);
         genSession = std::make_unique<Ort::Session>(*env, genPath.c_str(), options);
-        LOGD("ONNX Sessions initialized successfully.");
         return true;
     } catch (const std::exception& e) {
         LOGE("Initialization Error: %s", e.what());
@@ -39,7 +37,6 @@ bool FommEngine::initialize(const std::string& kpPath, const std::string& genPat
     }
 }
 
-// Helper to run Keypoint Detector model
 std::vector<float> FommEngine::extractKeypoints(const std::vector<float>& inputFrame) {
     Ort::MemoryInfo memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     std::vector<int64_t> inputDims = {BATCH_SIZE, CHANNELS, TARGET_SIZE, TARGET_SIZE};
@@ -50,7 +47,6 @@ std::vector<float> FommEngine::extractKeypoints(const std::vector<float>& inputF
                                                             inputDims.data(), 
                                                             inputDims.size());
 
-    // DYNAMIC NAME RESOLUTION
     Ort::AllocatorWithDefaultOptions allocator;
     auto inputNamePtr = kpSession->GetInputNameAllocated(0, allocator);
     auto outputNamePtr = kpSession->GetOutputNameAllocated(0, allocator);
@@ -68,7 +64,6 @@ std::vector<float> FommEngine::extractKeypoints(const std::vector<float>& inputF
     return std::vector<float>(floatarr, floatarr + count);
 }
 
-// Helper to run Dense Motion Generator model
 std::vector<float> FommEngine::generateFrame(const std::vector<float>& sourceFrame, 
                                              const std::vector<float>& kpSource, 
                                              const std::vector<float>& kpDriving, 
@@ -81,38 +76,34 @@ std::vector<float> FommEngine::generateFrame(const std::vector<float>& sourceFra
     std::vector<Ort::AllocatedStringPtr> inputNamePtrs;
     std::vector<const char*> inputNames;
     std::vector<Ort::Value> inputTensors;
-    std::vector<std::vector<float>> inputBuffers; // Preserve memory for ONNX run
+    std::vector<std::vector<float>> inputBuffers; 
     
     inputBuffers.resize(inputCount);
 
-    // DYNAMIC TENSOR INJECTION: Read exactly what the graph expects and mold our inputs to it
     for (size_t i = 0; i < inputCount; i++) {
         inputNamePtrs.push_back(genSession->GetInputNameAllocated(i, allocator));
         std::string name = inputNamePtrs.back().get();
         inputNames.push_back(inputNamePtrs.back().get());
 
-        // Extract expected Shape/Rank directly from the loaded ONNX Model
         auto typeInfo = genSession->GetInputTypeInfo(i);
         auto tensorInfo = typeInfo.GetTensorTypeAndShapeInfo();
         std::vector<int64_t> dims = tensorInfo.GetShape();
         
         size_t elementCount = 1;
         for (auto& dim : dims) {
-            if (dim <= 0) dim = 1; // Resolve dynamic shapes (e.g., -1 batch sizes)
+            if (dim <= 0) dim = 1; 
             elementCount *= dim;
         }
         
-        inputBuffers[i].resize(elementCount, 0.0f); // Default to zeros
+        inputBuffers[i].resize(elementCount, 0.0f); 
 
-        // Build 4D Identity Matrices for Jacobians if requested by model
         if (name.find("jacobian") != std::string::npos && dims.size() == 4) {
-            int num_kp = dims[1]; // typically 10 or 15 keypoints
+            int num_kp = dims[1]; 
             for (int k = 0; k < num_kp; k++) {
-                inputBuffers[i][k * 4 + 0] = 1.0f; // [0,0] identity
-                inputBuffers[i][k * 4 + 3] = 1.0f; // [1,1] identity
+                inputBuffers[i][k * 4 + 0] = 1.0f;
+                inputBuffers[i][k * 4 + 3] = 1.0f; 
             }
         } 
-        // Feed 3D Keypoint Coordinate values
         else if (name.find("value") != std::string::npos || dims.size() == 3) {
             if (name.find("source") != std::string::npos && kpSource.size() <= elementCount) {
                 std::copy(kpSource.begin(), kpSource.end(), inputBuffers[i].begin());
@@ -120,7 +111,6 @@ std::vector<float> FommEngine::generateFrame(const std::vector<float>& sourceFra
                 std::copy(kpDriving.begin(), kpDriving.end(), inputBuffers[i].begin());
             }
         }
-        // Feed 4D Image Buffer
         else if (name.find("image") != std::string::npos && sourceFrame.size() <= elementCount) {
             std::copy(sourceFrame.begin(), sourceFrame.end(), inputBuffers[i].begin());
         }
@@ -147,50 +137,66 @@ std::vector<float> FommEngine::generateFrame(const std::vector<float>& sourceFra
     return std::vector<float>(floatarr, floatarr + count);
 }
 
-bool FommEngine::processVideo(const std::string& sourceImagePath, const std::string& drivingVideoPath, const std::string& outputPath) {
-    if (!kpSession || !genSession) {
-        LOGE("Sessions not initialized.");
-        return false;
+bool FommEngine::processFrame(JNIEnv* env, jobject sourceBitmap, jobject drivingBitmap, jobject outputBitmap, bool isFirstFrame) {
+    if (!kpSession || !genSession) return false;
+
+    if (isFirstFrame) {
+        cachedSourceKp.clear();
+        cachedInitialDrivingKp.clear();
+        sourceImageBuffer.assign(BATCH_SIZE * CHANNELS * TARGET_SIZE * TARGET_SIZE, 0.0f);
     }
     
-    LOGD("Executing Native ONNX Inference Pipeline...");
+    std::vector<float> drivingBuffer(BATCH_SIZE * CHANNELS * TARGET_SIZE * TARGET_SIZE, 0.0f);
+    AndroidBitmapInfo info;
+    void* pixels;
     
-    try {
-        // 1. Prepare Source Image Tensor 
-        std::vector<float> sourceImageBuffer(BATCH_SIZE * CHANNELS * TARGET_SIZE * TARGET_SIZE, 0.0f);
-        
-        // 2. Extract Source Keypoints
-        LOGD("Extracting Source Keypoints...");
-        std::vector<float> kpSource = extractKeypoints(sourceImageBuffer);
-
-        // 3. Extract Initial Driving Keypoints
-        LOGD("Extracting Initial Driving Keypoints...");
-        std::vector<float> firstDrivingFrameBuffer(BATCH_SIZE * CHANNELS * TARGET_SIZE * TARGET_SIZE, 0.0f);
-        std::vector<float> kpDrivingInitial = extractKeypoints(firstDrivingFrameBuffer);
-
-        // 4. Frame Loop inference
-        LOGD("Running Dense Motion Generator...");
-        std::vector<float> currentDrivingFrameBuffer(BATCH_SIZE * CHANNELS * TARGET_SIZE * TARGET_SIZE, 0.0f);
-        std::vector<float> kpDriving = extractKeypoints(currentDrivingFrameBuffer);
-        
-        // 5. Synthesize output frame
-        LOGD("Synthesizing Final Output Frame...");
-        std::vector<float> generatedFrame = generateFrame(sourceImageBuffer, kpSource, kpDriving, kpDrivingInitial);
-
-        // NDK MEDIA API FALLBACK
-        // Note: The physical writing of the generated float arrays into an MP4 container 
-        // requires extensive AMediaCodec / AMediaMuxer setup. To ensure the UI receives 
-        // a valid file descriptor without crashing in the interim, we finalize a valid container.
-        std::ifstream src(drivingVideoPath, std::ios::binary);
-        std::ofstream dst(outputPath, std::ios::binary);
-        if (src && dst) {
-            dst << src.rdbuf();
+    // Evaluate Source Image
+    if (isFirstFrame) {
+        AndroidBitmap_getInfo(env, sourceBitmap, &info);
+        AndroidBitmap_lockPixels(env, sourceBitmap, &pixels);
+        uint32_t* src = (uint32_t*)pixels;
+        for (int i = 0; i < info.width * info.height; ++i) {
+            uint32_t c = src[i];
+            sourceImageBuffer[i] = (c & 0xFF) / 255.0f;
+            sourceImageBuffer[info.width * info.height + i] = ((c >> 8) & 0xFF) / 255.0f;
+            sourceImageBuffer[2 * info.width * info.height + i] = ((c >> 16) & 0xFF) / 255.0f;
         }
-
-        LOGD("Pipeline execution complete. Success.");
-        return true;
-    } catch (const std::exception& e) {
-        LOGE("ONNX Runtime Exception during generation: %s", e.what());
-        return false;
+        AndroidBitmap_unlockPixels(env, sourceBitmap);
     }
+
+    // Evaluate Current Driving Frame
+    AndroidBitmap_getInfo(env, drivingBitmap, &info);
+    AndroidBitmap_lockPixels(env, drivingBitmap, &pixels);
+    uint32_t* drv = (uint32_t*)pixels;
+    for (int i = 0; i < info.width * info.height; ++i) {
+        uint32_t c = drv[i];
+        drivingBuffer[i] = (c & 0xFF) / 255.0f;
+        drivingBuffer[info.width * info.height + i] = ((c >> 8) & 0xFF) / 255.0f;
+        drivingBuffer[2 * info.width * info.height + i] = ((c >> 16) & 0xFF) / 255.0f;
+    }
+    AndroidBitmap_unlockPixels(env, drivingBitmap);
+
+    // Initial Tensor Execution
+    if (isFirstFrame) {
+        cachedSourceKp = extractKeypoints(sourceImageBuffer);
+        cachedInitialDrivingKp = extractKeypoints(drivingBuffer);
+    }
+
+    // Process Dense Delta Motion 
+    std::vector<float> kpDriving = extractKeypoints(drivingBuffer);
+    std::vector<float> outputFrame = generateFrame(sourceImageBuffer, cachedSourceKp, kpDriving, cachedInitialDrivingKp);
+
+    // Bind Synthesized Frame back to JNI Object
+    AndroidBitmap_getInfo(env, outputBitmap, &info);
+    AndroidBitmap_lockPixels(env, outputBitmap, &pixels);
+    uint32_t* out = (uint32_t*)pixels;
+    for (int i = 0; i < info.width * info.height; ++i) {
+        float r = std::clamp(outputFrame[i], 0.0f, 1.0f) * 255.0f;
+        float g = std::clamp(outputFrame[info.width * info.height + i], 0.0f, 1.0f) * 255.0f;
+        float b = std::clamp(outputFrame[2 * info.width * info.height + i], 0.0f, 1.0f) * 255.0f;
+        out[i] = (0xFF << 24) | (((uint32_t)b & 0xFF) << 16) | (((uint32_t)g & 0xFF) << 8) | ((uint32_t)r & 0xFF);
+    }
+    AndroidBitmap_unlockPixels(env, outputBitmap);
+
+    return true;
 }
